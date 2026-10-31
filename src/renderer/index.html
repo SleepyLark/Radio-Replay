@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' file: data:; media-src 'self' file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Radio Replay</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="enhancements.css" />
+    <link rel="stylesheet" href="editor.css" />
+    <link rel="stylesheet" href="home.css" />
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <main>
+      <aside>
+        <div class="brand">
+          <span class="signal">◉</span>
+          <div>
+            <b>RADIO REPLAY</b>
+            <small>LOCAL BROADCAST SYSTEM</small>
+          </div>
+        </div>
+        <button id="import" class="choose">＋ CREATE STATION</button>
+        <button id="manageStations" class="choose secondary">MANAGE STATIONS</button>
+        <div class="sidebar-meta">
+          <button id="openSettings" class="config-action">⚙ Settings</button>
+          <div id="libraryPath" class="library-path">Loading stations…</div>
+        </div>
+        <div class="groupbar">
+          <select id="groupSelect" aria-label="Station group"></select>
+          <button id="newGroup" title="Create group" aria-label="Create group">＋</button>
+          <button id="editGroup" title="Edit group" aria-label="Edit group">✎</button>
+        </div>
+        <nav id="stationList" aria-label="Radio stations">
+          <div class="empty">Loading stations…</div>
+        </nav>
+      </aside>
+      <section class="deck">
+        <section id="settingsView" hidden>
+          <p class="home-kicker">PREFERENCES</p>
+          <h1>Settings</h1>
+          <h2>Appearance</h2>
+          <label>
+            Accent color
+            <input id="accentColor" type="color" value="#c7f464" />
+          </label>
+          <label class="checkbox-setting">
+            <input id="matchBannerAccent" type="checkbox" />
+            Match player accent to each station banner
+          </label>
+          <p>The accent softly changes when you tune to a station with a banner image or color.</p>
+          <label>
+            Long title bounce speed
+            <input id="bounceSpeed" type="number" min="10" max="200" step="5" value="40" />
+            pixels per second
+          </label>
+          <h2>Playback</h2>
+          <label>
+            Global crossfade for individual tracks
+            <input id="globalFade" type="number" min="0" max="30" step="0.5" value="0" />
+            seconds
+          </label>
+          <p>Station crossfade choices are set in Edit station. A value of 0 disables crossfade.</p>
+          <h2>Tuning sound</h2>
+          <label>
+            Static noise while tuning
+            <span id="staticName">Bundled static</span>
+          </label>
+          <div class="settings-actions">
+            <button id="chooseStatic">Choose audio file</button>
+            <button id="useBundledStatic">Use bundled</button>
+            <button id="clearStatic">Disable</button>
+          </div>
+          <h2>Files and data</h2>
+          <div class="settings-actions">
+            <button id="showConfig">Open stations.json</button>
+            <button id="settingsBack">← Back to stations</button>
+          </div>
+        </section>
+        <section id="homeView">
+          <p class="home-kicker">YOUR RADIO</p>
+          <h1>Choose a station</h1>
+          <p id="homeSummary">Your stations will appear here.</p>
+          <div id="homeStations"></div>
+        </section>
+        <div id="playerView" hidden>
+          <header>
+            <button id="homeButton" class="back-stations">← All Stations</button>
+            <span class="hint">↑ ↓ TO TUNE</span>
+          </header>
+          <div class="dial">
+            <img id="dialBanner" alt="" hidden />
+            <div class="scanlines"></div>
+            <img id="logo" alt="" hidden />
+            <div class="frequency" id="frequency">—</div>
+            <div class="station-name" id="stationName">Select a station</div>
+            <div class="station-sub" id="stationSub">Your local radio archive</div>
+          </div>
+          <button id="editStation" class="logo-action">Edit station</button>
+          <section class="now">
+            <div class="on-air">
+              <i></i>
+              ON AIR
+            </div>
+            <div id="titleViewport" class="title-viewport">
+              <div id="trackTitle" class="track-title" aria-live="polite">Ready when you are</div>
+            </div>
+            <div id="trackAlbum" class="track-album"></div>
+            <div id="metadata" class="metadata"></div>
+            <div id="playbackNotice" class="metadata" role="status"></div>
+          </section>
+          <section class="controls">
+            <button id="prev" title="Previous station" aria-label="Previous station">◀◀</button>
+            <button id="play" class="play" title="Play or pause" aria-label="Play or pause">
+              ▶
+            </button>
+            <button id="next" title="Next station" aria-label="Next station">▶▶</button>
+            <input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+            <output id="time" aria-label="Playback time">00:00 / 00:00</output>
+          </section>
+          <p class="how">
+            Broadcast files loop continuously. Multi-track stations play in a shuffled order.
+          </p>
+        </div>
+      </section>
+    </main>
+    <dialog id="editor">
+      <form method="dialog" novalidate>
+        <h2 id="editorTitle"></h2>
+        <div id="editorBody"></div>
+        <menu>
+          <button type="button" id="editorCancel">Cancel</button>
+          <button type="button" id="editorSave">Save</button>
+        </menu>
+      </form>
+    </dialog>
+    <audio id="audio" preload="metadata"></audio>
+    <audio id="audioNext" preload="metadata"></audio>
+    <audio id="staticAudio" preload="none" loop></audio>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,174 @@
+/* Sidebar scrolling, station groups, and the shared editor dialog. */
+aside {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#stationList {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+  scrollbar-color: #456157 transparent;
+}
+.choose.secondary {
+  margin-top: 8px;
+  border-color: #456157;
+  color: var(--ink);
+}
+.sidebar-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 8px 4px 12px;
+  min-width: 0;
+}
+.sidebar-meta .config-action {
+  flex: none;
+  margin: 0;
+}
+.sidebar-meta .library-path {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  text-align: right;
+}
+.groupbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.groupbar select {
+  min-width: 0;
+  flex: 1;
+}
+.groupbar select,
+.groupbar button {
+  background: #172522;
+  color: var(--ink);
+  border: 1px solid #3d5e52;
+  padding: 9px;
+  font: 11px 'DM Mono';
+  cursor: pointer;
+}
+.groupbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dial #logo {
+  position: relative;
+  z-index: 2;
+  max-width: min(60%, 360px);
+  max-height: 165px;
+  object-fit: contain;
+  margin: 0 auto 8px;
+}
+.dial #logo.spin-enabled {
+  width: min(165px, 50%);
+  height: 165px;
+  animation: rotate3dAnimationTimeline 3.5s linear infinite;
+  animation-play-state: paused;
+}
+.dial #logo.spin-enabled.is-playing {
+  animation-play-state: running;
+}
+@keyframes rotate3dAnimationTimeline {
+  0% {
+    transform: perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+  }
+  50% {
+    transform: perspective(700px) rotateX(0deg) rotateY(-180deg) rotateZ(0deg);
+  }
+  100% {
+    transform: perspective(700px) rotateX(0deg) rotateY(-360deg) rotateZ(0deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dial #logo.spin-enabled {
+    animation: none;
+  }
+}
+.logo-action {
+  align-self: flex-end;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: 11px 'DM Mono';
+  cursor: pointer;
+  margin-top: -14px;
+  margin-bottom: 18px;
+}
+.logo-action:hover {
+  color: var(--green);
+}
+dialog {
+  width: min(540px, 90vw);
+  max-height: 80vh;
+  background: #111b1a;
+  color: var(--ink);
+  border: 1px solid #456157;
+  box-shadow: 0 20px 80px #000;
+  padding: 25px;
+  font: 12px 'DM Mono';
+}
+dialog::backdrop {
+  background: #000b;
+}
+dialog h2 {
+  font: 600 26px 'Oswald';
+  margin: 0 0 18px;
+}
+dialog label {
+  display: block;
+  margin: 10px 0;
+}
+dialog input:not([type='checkbox']),
+dialog select {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  margin-top: 5px;
+  background: #0a1010;
+  color: var(--ink);
+  border: 1px solid #456157;
+}
+dialog button {
+  background: #20362e;
+  color: var(--ink);
+  border: 1px solid #456157;
+  padding: 9px 13px;
+  cursor: pointer;
+}
+dialog menu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0;
+  margin: 20px 0 0;
+}
+#editorSave {
+  background: var(--green);
+  color: #10200e;
+}
+.member-list {
+  max-height: 38vh;
+  overflow: auto;
+  border: 1px solid #263b36;
+  padding: 8px;
+}
+.member-list details {
+  border-bottom: 1px solid #263b36;
+  padding: 3px;
+}
+.member-list details label {
+  margin: 7px;
+}
+.member-list details > label {
+  padding-left: 22px;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  aside {
+    height: 42vh;
+  }
+}

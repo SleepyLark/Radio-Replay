@@ -1,0 +1,29 @@
+# Dependencies and package manager caches
+node_modules/
+.npm-cache/
+.electron-cache/
+.builder-cache/
+.cache/
+
+# Electron build output
+release/
+dist/
+dist-bulk/
+out/
+
+# Local media and station data
+*.mp3
+!static.mp3
+*.m4a
+*.aac
+*.ogg
+*.wav
+*.flac
+stations.json
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

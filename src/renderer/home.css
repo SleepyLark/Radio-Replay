@@ -1,0 +1,88 @@
+/* Home station cards and visibility of the home/player views. */
+.back-stations {
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font:
+    11px 'DM Mono',
+    monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.back-stations:hover {
+  text-decoration: underline;
+}
+#playerView[hidden],
+#homeView[hidden] {
+  display: none;
+}
+#playerView {
+  display: flex;
+  flex-direction: column;
+}
+.home-kicker {
+  color: var(--green);
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+#homeView h1 {
+  font: 600 54px 'Oswald';
+  text-transform: uppercase;
+  margin: 8px 0;
+}
+#homeSummary {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+#homeStations {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  max-height: 62vh;
+  overflow: auto;
+  padding-right: 8px;
+}
+.home-station {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 88px;
+  background: #13211d;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.home-station:hover {
+  border-color: var(--green);
+  background: #20362e;
+}
+.home-station img,
+.home-icon {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  flex: none;
+}
+.home-icon {
+  display: grid;
+  place-items: center;
+  color: var(--green);
+  font-size: 38px;
+}
+.home-station small,
+.home-station em {
+  display: block;
+  color: var(--muted);
+  font: 10px 'DM Mono';
+  font-style: normal;
+}
+.home-station strong {
+  display: block;
+  font: 600 20px 'Oswald';
+  margin: 4px 0;
+}

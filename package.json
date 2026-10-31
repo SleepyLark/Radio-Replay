@@ -1,0 +1,64 @@
+{
+  "name": "radio-replay",
+  "version": "0.3.0",
+  "description": "A local GTA-inspired radio player",
+  "author": "Skylark",
+  "license": "MIT",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/renderer/app.js",
+    "smoke": "electron tests/smoke-electron.cjs",
+    "icons": "electron scripts/build-icons.cjs",
+    "package:win": "electron-builder --win portable",
+    "package": "electron-builder"
+  },
+  "devDependencies": {
+    "@fontsource/dm-mono": "^5.3.0",
+    "@fontsource/oswald": "^5.3.0",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.0.0",
+    "prettier": "^3.9.10"
+  },
+  "build": {
+    "appId": "com.local.radioreplay",
+    "productName": "Radio Replay",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/audio/static.mp3",
+        "to": "assets/audio/static.mp3"
+      },
+      {
+        "from": "assets/icons/radio.png",
+        "to": "assets/icons/radio.png"
+      },
+      {
+        "from": "assets/icons/tray-mask.png",
+        "to": "assets/icons/tray-mask.png"
+      }
+    ],
+    "win": {
+      "icon": "assets/icons/radio.ico",
+      "target": [
+        "portable"
+      ]
+    }
+  },
+  "allowScripts": {
+    "electron": true,
+    "electron-winstaller": false
+  },
+  "dependencies": {
+    "music-metadata": "^12.3.2"
+  }
+}

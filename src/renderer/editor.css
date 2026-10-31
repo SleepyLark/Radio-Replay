@@ -1,0 +1,93 @@
+/* File lists and bulk station management inside the editor dialog. */
+#crossfadeField[hidden] {
+  display: none;
+}
+.editor-section {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.editor-section p,
+#bannerName, #logoName {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+dialog label.editor-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+dialog .inline-number,
+dialog .inline-color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+dialog .inline-number input[type='number'] {
+  width: 90px;
+  margin: 0;
+}
+dialog .inline-color input[type='color'] {
+  width: 56px;
+  height: 36px;
+  padding: 3px;
+  margin: 0;
+}
+.disabled-field {
+  opacity: 0.45;
+}
+
+.config-action {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: 10px 'DM Mono';
+  text-align: left;
+  cursor: pointer;
+  margin: -10px 0 12px;
+  padding: 0;
+}
+.config-action:hover {
+  color: var(--green);
+}
+.file-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 5px;
+  border-bottom: 1px solid var(--line);
+}
+.file-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-row button {
+  font-size: 10px;
+}
+.danger {
+  margin-top: 16px;
+  border-color: #a44;
+  color: #f99;
+}
+.error {
+  color: #f99;
+}
+.bulk-list {
+  max-height: 48vh;
+}
+.bulk-list label {
+  display: block;
+  padding: 4px 2px;
+}
+.bulk-list small {
+  color: var(--muted);
+}

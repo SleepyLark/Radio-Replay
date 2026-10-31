@@ -1,0 +1,377 @@
+@font-face {
+  font-family: 'DM Mono';
+  src: url('fonts/dm-mono-latin-400-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('fonts/dm-mono-latin-500-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: Oswald;
+  src: url('fonts/oswald-latin-500-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: Oswald;
+  src: url('fonts/oswald-latin-600-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: Oswald;
+  src: url('fonts/oswald-latin-700-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+/* Base palette, layout, radio display, and playback controls. */
+@property --green {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #c7f464;
+}
+:root {
+  --ink: #e8f4e9;
+  --muted: #88a293;
+  --green: #c7f464;
+  --deep: #0a1010;
+  --panel: #111b1a;
+  --line: #263b36;
+  transition: --green 650ms ease;
+}
+* {
+  box-sizing: border-box;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+body {
+  margin: 0;
+  background: radial-gradient(circle at 75% 25%, #19312a 0, #0a1010 40%, #070b0b 100%);
+  color: var(--ink);
+  font-family: 'DM Mono', monospace;
+  min-height: 100vh;
+}
+main {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  min-height: 100vh;
+}
+aside {
+  background: rgba(8, 14, 13, 0.88);
+  border-right: 1px solid var(--line);
+  padding: 28px 16px;
+  overflow: auto;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 12px 30px;
+}
+.brand b {
+  font:
+    600 25px/1 'Oswald',
+    sans-serif;
+  letter-spacing: 1px;
+}
+.brand small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 5px;
+}
+.signal {
+  color: var(--green);
+  font-size: 32px;
+  text-shadow: 0 0 18px #c7f464;
+}
+.choose {
+  width: 100%;
+  border: 1px solid var(--green);
+  background: transparent;
+  color: var(--green);
+  padding: 12px;
+  font: 500 12px 'DM Mono';
+  cursor: pointer;
+}
+.choose:hover {
+  background: var(--green);
+  color: #10200e;
+}
+.library-path {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 14px 4px 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game {
+  border-top: 1px solid var(--line);
+  padding: 16px 0 9px;
+}
+.game h2 {
+  color: var(--muted);
+  font: 500 11px 'DM Mono';
+  letter-spacing: 1.4px;
+  margin: 0 8px 8px;
+}
+.station {
+  display: flex;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  padding: 10px 10px 10px 14px;
+  text-align: left;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font: 12px 'DM Mono';
+}
+.station small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.station:hover {
+  background: #172522;
+}
+.station.active {
+  background: #20362e;
+  border-left-color: var(--green);
+  color: var(--green);
+}
+.empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 24px 10px;
+}
+.deck {
+  display: flex;
+  flex-direction: column;
+  max-width: 920px;
+  width: 100%;
+  margin: auto;
+  padding: 40px 56px;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+}
+.hint {
+  font-size: 9px;
+}
+.dial {
+  position: relative;
+  margin: 40px 0 25px;
+  border: 1px solid #456157;
+  background: #0b1513;
+  box-shadow:
+    inset 0 0 80px #162e27,
+    0 15px 70px #000;
+  min-height: 290px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+.dial #dialBanner {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.dial #dialBanner[hidden] {
+  display: none;
+}
+.dial::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(#06100cb8, #06100c70 45%, #06100cb8);
+  pointer-events: none;
+}
+.scanlines {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0.16;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, #bef2ba 4px 5px);
+}
+.frequency,
+.station-name,
+.station-sub {
+  position: relative;
+  z-index: 2;
+  text-shadow:
+    0 2px 8px #000c,
+    0 0 2px #000;
+}
+.frequency {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  font: 700 25px/1 'Oswald';
+  letter-spacing: 0;
+  color: var(--green);
+  text-shadow: 0 0 25px #c7f464;
+}
+.station-name {
+  font: 600 42px/1.1 'Oswald';
+  text-transform: uppercase;
+  text-align: center;
+  margin-top: 12px;
+  letter-spacing: 1px;
+}
+.station-sub {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  margin-top: 13px;
+}
+.now {
+  min-height: 115px;
+  border-left: 2px solid var(--green);
+  padding: 8px 18px;
+}
+.on-air {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: var(--green);
+  margin-bottom: 11px;
+}
+.on-air i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: 6px;
+  box-shadow: 0 0 7px var(--green);
+}
+.track-title {
+  font: 600 25px 'Oswald';
+  letter-spacing: 0.5px;
+  width: max-content;
+  min-width: 100%;
+  white-space: nowrap;
+}
+.title-viewport {
+  width: 100%;
+  overflow: hidden;
+}
+.track-title.bouncing {
+  min-width: 0;
+  animation: title-bounce var(--bounce-duration) ease-in-out infinite alternate;
+}
+@keyframes title-bounce {
+  to {
+    transform: translateX(calc(-1 * var(--bounce-distance)));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .track-title.bouncing {
+    animation: none;
+  }
+}
+.track-album,
+.metadata {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 5px;
+}
+.metadata {
+  color: #c1d3c5;
+  min-height: 16px;
+}
+.track-album:empty,
+.metadata:empty {
+  display: none;
+}
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 35px;
+}
+.controls button {
+  color: var(--ink);
+  background: #172522;
+  border: 1px solid #3d5e52;
+  width: 48px;
+  height: 42px;
+  cursor: pointer;
+}
+.controls button:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+.controls .play {
+  background: var(--green);
+  color: #142014;
+  border-color: var(--green);
+  width: 60px;
+  font-size: 18px;
+}
+input[type='range'] {
+  accent-color: var(--green);
+  margin-left: 12px;
+  flex: 1;
+}
+output {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.how {
+  color: #6c8579;
+  font-size: 10px;
+  line-height: 1.6;
+  margin-top: 28px;
+}
+@media (max-width: 760px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .deck {
+    padding: 25px;
+  }
+  .dial {
+    margin: 25px 0;
+    min-height: 220px;
+  }
+  .frequency {
+    font-size: 22px;
+  }
+  .station-name {
+    font-size: 32px;
+  }
+  .hint {
+    display: none;
+  }
+}
