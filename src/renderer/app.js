@@ -23,6 +23,10 @@ let settings = {
   crossfade: 0,
   bounceSpeed: 40,
   matchBannerAccent: false,
+  listDensity: 'comfortable',
+  showScanlines: true,
+  reduceMotion: false,
+  showProgress: true,
 };
 let bundledStaticPath = '';
 
@@ -31,6 +35,7 @@ let selected = null;
 let groupId = 'all';
 let sidecar = null;
 let displayedTrackPath = '';
+let displayedTrackTitle = '';
 let token = 0;
 let importPaths = [];
 let currentIndex = 0;
@@ -74,6 +79,10 @@ function sanitizeConfig(config) {
         bannerColor: /^#[0-9a-f]{6}$/i.test(station.bannerColor) ? station.bannerColor : '',
         bannerAccent: /^#[0-9a-f]{6}$/i.test(station.bannerAccent) ? station.bannerAccent : '',
         spinLogo: station.spinLogo === true,
+        textMode: ['titles', 'lyrics', 'ignore'].includes(station.textMode)
+          ? station.textMode
+          : 'auto',
+        accent: /^#[0-9a-f]{6}$/i.test(station.accent) ? station.accent : '',
       }))
     : [];
   groups = Array.isArray(config.groups)
@@ -103,6 +112,10 @@ function sanitizeConfig(config) {
     crossfade: Number.isFinite(loaded.crossfade) ? loaded.crossfade : settings.crossfade,
     bounceSpeed: Number.isFinite(loaded.bounceSpeed) ? loaded.bounceSpeed : settings.bounceSpeed,
     matchBannerAccent: loaded.matchBannerAccent === true,
+    listDensity: loaded.listDensity === 'compact' ? 'compact' : 'comfortable',
+    showScanlines: loaded.showScanlines !== false,
+    reduceMotion: loaded.reduceMotion === true,
+    showProgress: loaded.showProgress !== false,
   };
 }
 
@@ -191,6 +204,13 @@ function applySettings() {
   $('#matchBannerAccent').checked = settings.matchBannerAccent;
   $('#globalFade').value = settings.crossfade ?? 0;
   $('#bounceSpeed').value = settings.bounceSpeed ?? 40;
+  $('#listDensity').value = settings.listDensity;
+  for (const key of ['showScanlines', 'reduceMotion', 'showProgress'])
+    $('#' + key).checked = settings[key];
+  document.documentElement.dataset.density = settings.listDensity;
+  document.documentElement.classList.toggle('reduce-motion', settings.reduceMotion);
+  document.documentElement.classList.toggle('no-scanlines', !settings.showScanlines);
+  $('#recordingProgress').hidden = !settings.showProgress;
   updateTitleBounce();
   $('#staticName').textContent =
     settings.staticPath === 'bundled'
@@ -201,6 +221,7 @@ function applySettings() {
 }
 
 function accentFor(station) {
+  if (/^#[0-9a-f]{6}$/i.test(station?.accent)) return station.accent;
   const base = /^#[0-9a-f]{6}$/i.test(settings.accent) ? settings.accent : '#c7f464';
   if (!settings.matchBannerAccent || !station) return base;
   const stationColor = station.bannerPath ? station.bannerAccent : station.bannerColor;
@@ -294,12 +315,15 @@ function waitForMetadata(element, current) {
 
 function sidebarStationMarkup(station) {
   const active = selected?.key === station.key ? 'active' : '';
-  const description = station.mode === 'longset' ? 'broadcast' : `${station.tracks.length} tracks`;
+  const description =
+    station.mode === 'longset'
+      ? ''
+      : `${station.tracks.length} track${station.tracks.length === 1 ? '' : 's'}`;
 
   return `
     <button class="station ${active}" data-key="${esc(station.key)}">
       <span>${esc(station.station)}</span>
-      <small>${description}</small>
+      ${description ? `<small>${description}</small>` : ''}
     </button>
   `;
 }
@@ -309,7 +333,9 @@ function homeStationMarkup(station) {
     ? `<img src="${esc(url(logos[station.key]))}" alt="" loading="lazy" decoding="async">`
     : '<span class="home-icon">◉</span>';
   const description =
-    station.mode === 'longset' ? 'Continuous broadcast' : `${station.tracks.length} tracks`;
+    station.mode === 'longset'
+      ? 'Continuous broadcast'
+      : `${station.tracks.length} track${station.tracks.length === 1 ? '' : 's'}`;
 
   return `
     <button class="home-station" data-key="${esc(station.key)}">
@@ -332,7 +358,10 @@ function render() {
   $('#groupSelect').value = groupId;
   $('#editGroup').disabled = groupId === 'all';
   const sections = new Map();
-  const shown = visible();
+  const query = $('#stationSearch').value.trim().toLocaleLowerCase();
+  const shown = visible().filter((s) =>
+    `${s.station} ${s.game || ''}`.toLocaleLowerCase().includes(query),
+  );
   for (const s of shown) {
     const heading = groupId === 'all' ? s.game || '' : 'Stations';
     if (!sections.has(heading)) sections.set(heading, []);
@@ -380,31 +409,42 @@ function parse(raw) {
         title: typeof data.title === 'string' ? data.title : '',
         artist: typeof data.artist === 'string' ? data.artist : '',
         album: typeof data.album === 'string' ? data.album : '',
-        text: typeof data.text === 'string' ? data.text : '',
         timed: Array.isArray(data.timed)
           ? data.timed
-              .filter((x) => x && Number.isFinite(x.at) && typeof x.text === 'string')
+              .filter((x) => x && Number.isFinite(x.at) && x.at >= 0 && typeof x.text === 'string')
               .sort((a, b) => a.at - b.at)
           : [],
       };
     } catch {
-      return { text: raw.text };
+      return { timed: [] };
     }
   }
-  const timed = [],
-    plain = [];
+  const timed = [];
   for (const line of raw.text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
-    const stamps = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
-    if (stamps.length && line.startsWith(stamps[0][0])) {
-      const lyric = line.replace(/^(?:\[\d+:\d+(?:\.\d+)?\])+\s*/, '');
-      for (const m of stamps) timed.push({ at: +m[1] * 60 + +m[2], text: lyric });
-    } else if (line.trim() && !/^\[[a-z]+:/i.test(line)) plain.push(line.trim());
+    const prefix = line.trimStart().match(/^(?:\[\d+:[0-5]\d(?:\.\d+)?\])+/)?.[0];
+    if (!prefix) continue;
+    const lyric = line.trimStart().slice(prefix.length).trim();
+    for (const m of prefix.matchAll(/\[(\d+):([0-5]\d(?:\.\d+)?)\]/g)) {
+      const at = +m[1] * 60 + +m[2];
+      if (Number.isFinite(at)) timed.push({ at, text: lyric });
+    }
   }
-  return { timed: timed.sort((a, b) => a.at - b.at), text: plain.join(' • ') };
+  return { timed: timed.sort((a, b) => a.at - b.at) };
 }
 
+const textModeFor = (station) =>
+  ['titles', 'lyrics', 'ignore'].includes(station?.textMode)
+    ? station.textMode
+    : station?.mode === 'longset'
+      ? 'titles'
+      : 'lyrics';
+
 function metadata() {
-  if (!sidecar) return;
+  const mode = textModeFor(selected);
+  if (!sidecar?.timed?.length || mode === 'ignore') {
+    $('#metadata').textContent = '';
+    return;
+  }
 
   let currentLine;
   if (sidecar.timed?.length) {
@@ -417,24 +457,16 @@ function metadata() {
     }
     currentLine = sidecar.timed[low - 1]?.text;
   }
-  const singleContinuous = selected?.mode === 'longset' && selected.tracks.length === 1;
-
-  if (singleContinuous && sidecar.timed?.length) {
-    // For a one-file broadcast, LRC timestamps identify the current song.
-    if (currentLine && $('#trackTitle').textContent !== currentLine)
-      $('#trackTitle').textContent = currentLine;
+  if (mode === 'titles') {
+    // The meaning belongs to the station, independent of how many recordings it holds.
+    const title = currentLine || displayedTrackTitle;
+    if ($('#trackTitle').textContent !== title) $('#trackTitle').textContent = title;
     $('#trackAlbum').textContent = '';
     $('#metadata').textContent = '';
     return;
   }
 
-  if (singleContinuous) {
-    $('#trackAlbum').textContent = '';
-    $('#metadata').textContent = '';
-    return;
-  }
-
-  const next = currentLine || sidecar.text || '';
+  const next = currentLine || '';
   if ($('#metadata').textContent !== next) $('#metadata').textContent = next;
 }
 
@@ -442,26 +474,24 @@ async function showTrackDetails(track, station, currentToken) {
   // Both tuning and crossfade completion use this path so LRC timing follows the active MP3.
   displayedTrackPath = track.path;
   sidecar = null;
+  displayedTrackTitle = track.name;
   $('#trackTitle').textContent = track.name;
   $('#trackAlbum').textContent = '';
   $('#metadata').textContent = '';
 
-  const singleContinuous = station.mode === 'longset' && station.tracks.length === 1;
   const [sidecarFile, tags] = await Promise.all([
-    window.radio.readSidecar(track.path),
-    singleContinuous ? null : window.radio.readTags(track.path),
+    textModeFor(station) === 'ignore' ? null : window.radio.readSidecar(track.path),
+    window.radio.readTags(track.path),
   ]);
   if (currentToken !== token || displayedTrackPath !== track.path) return;
 
   sidecar = parse(sidecarFile);
-  if (singleContinuous) {
-    if (sidecar?.title) $('#trackTitle').textContent = sidecar.title;
-  } else {
-    const title = tags?.title || sidecar?.title || track.name;
-    const artist = tags?.artist || sidecar?.artist;
-    $('#trackTitle').textContent = artist ? `${artist} - ${title}` : title;
-    $('#trackAlbum').textContent = tags?.album || sidecar?.album || '';
-  }
+  const timedInfo = sidecar?.timed?.length ? sidecar : null;
+  const title = tags?.title || timedInfo?.title || track.name;
+  const artist = tags?.artist || timedInfo?.artist;
+  displayedTrackTitle = artist ? `${artist} - ${title}` : title;
+  $('#trackTitle').textContent = displayedTrackTitle;
+  $('#trackAlbum').textContent = tags?.album || timedInfo?.album || '';
   metadata();
 }
 
@@ -657,6 +687,7 @@ async function tune(s) {
   $('#trackAlbum').textContent = '';
   $('#metadata').textContent = '';
   $('#time').textContent = '00:00 / 00:00';
+  $('#recordingProgress').value = 0;
   updateActiveStation();
   try {
     const clock = await clockFor(s, current);
@@ -731,7 +762,11 @@ function editor(title, html, commit) {
   const dialog = $('#editor');
   $('#editorTitle').textContent = title;
   $('#editorBody').innerHTML = html;
+  dialog.ondrop = null;
   $('#editorSave').textContent = 'Save';
+  $('#editorSave').disabled = false;
+  $('#editorSave').classList.remove('danger');
+  $('#editorBody').scrollTop = 0;
   dialog.showModal();
   $('#editorCancel').onclick = () => dialog.close('cancel');
   $('#editorSave').onclick = () => {
@@ -746,27 +781,53 @@ function editor(title, html, commit) {
 
 function stationFormMarkup(station, logoPath, bannerPath) {
   return `
+    <div id="stationPreview" class="station-preview" aria-label="Station appearance preview">
+      <img id="previewBanner" alt="" hidden>
+      <div class="preview-content"><img id="previewLogo" alt="" hidden><span id="previewPlaceholder">◉</span>
+        <strong id="previewName"></strong><small id="previewMode"></small></div>
+    </div>
+    <details class="editor-section" open><summary>Essentials</summary>
+    ${
+      !station
+        ? `<label>Create
+      <select id="newGrouping"><option value="combined">One station with all files</option><option value="separate">One station per file</option></select>
+    </label><p id="creationPreview"></p>`
+        : ''
+    }
+    <div id="stationIdentity">
     <label>Station name
       <input id="newName" value="${esc(station?.station || '')}" placeholder="My radio station">
     </label>
+    </div>
+    <div class="preset-actions" aria-label="Station presets">
+      <button type="button" data-preset="tracks">♫ Music station</button>
+      <button type="button" data-preset="longset">◉ Radio broadcast</button>
+    </div>
+    <label>Playback style
+      <select id="newMode">
+        <option value="tracks">Shuffle tracks</option>
+        <option value="longset">Broadcast — play in order and loop</option>
+      </select>
+    </label>
+    <p id="playbackHelp"></p>
+    <div id="broadcastSuggestion" class="suggestion" hidden>These look like broadcasts. Play them in order?
+      <button type="button" id="acceptBroadcast">Use broadcast</button>
+    </div>
     <div class="file-actions">
       <button type="button" id="browseFiles">Add files</button>
       <button type="button" id="browseFolder">Add folder</button>
     </div>
-    <label>Audio arrangement
-      <select id="newMode">
-        <option value="tracks">Individual tracks in one station</option>
-        <option value="longset">Continuous longset (one station per file on creation)</option>
-      </select>
-    </label>
     <p id="fileCount"></p>
-    <div id="fileList" class="member-list"></div>
+    <p id="fileOrderHelp">Numbers show the file order for broadcasts. Use ↑ / ↓ to reorder.</p>
+    <div id="fileList" tabindex="0" role="region" aria-label="Audio files grouped by folder"></div>
+    </details>
+    <details id="stationAppearance" class="editor-section"><summary>Appearance</summary>
     <div class="editor-section">
       <strong>Station logo</strong>
       <p>Set a PNG, JPG, WebP, or animated GIF for the station.</p> 
       <div id="logoName">${esc(logoPath || 'None')}</div>
       <button type="button" id="browseLogo">Choose logo</button>
-      <button type="button" id="removeLogo">Remove logo</button>
+      <button type="button" id="removeLogo" ${logoPath ? '' : 'disabled'}>Remove logo</button>
       <label class="editor-check"><input id="spinLogo" type="checkbox" ${station?.spinLogo ? 'checked' : ''}> Spin logo while playing</label>
     </div>
     <div class="editor-section">
@@ -774,19 +835,89 @@ function stationFormMarkup(station, logoPath, bannerPath) {
       <p>Use an image or color across the radio display behind the station name.</p>
       <div id="bannerName">${esc(bannerPath || 'No banner image')}</div>
       <button type="button" id="browseBanner">Choose banner image</button>
-      <button type="button" id="removeBanner">Remove image</button>
+      <button type="button" id="removeBanner" ${bannerPath ? '' : 'disabled'}>Remove image</button>
       <label class="editor-check"><input id="useBannerColor" type="checkbox" ${station?.bannerColor ? 'checked' : ''}> Use a banner color</label>
       <label class="inline-color">Banner color <input id="bannerColor" type="color" value="${esc(station?.bannerColor || '#244b42')}"></label>
     </div>
-    
+    <label class="editor-check"><input id="useStationAccent" type="checkbox" ${station?.accent ? 'checked' : ''}> Override player accent</label>
+    <label class="inline-color">Station accent <input id="stationAccent" type="color" value="${esc(station?.accent || settings.accent)}"></label>
+    <p>Unchecked: follows Settings → Appearance. <button type="button" id="resetAccent" class="ghost">Reset to default</button></p>
+    </details>
+    <details class="editor-section"><summary>Advanced</summary>
+    <label>Use timestamped text as
+      <select id="textMode"><option value="auto">Default from playback style</option><option value="titles">Track titles</option><option value="lyrics">Lyrics</option><option value="ignore">Ignore sidecars</option></select>
+    </label>
+    <p id="textModeHelp"></p>
+    <p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p>
     <div id="crossfadeField" hidden class="editor-section">
-      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Use global Crossfade</label>
+      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(settings.crossfade)} seconds)</label>
       <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30" step="0.5"
         value="${station?.crossfade == null ? '0' : Math.min(30, station.crossfade)}"> seconds</label>
     </div>
+    </details>
     ${station ? '<button type="button" id="deleteStation" class="danger">Delete station</button>' : ''}
     <p id="editorError" class="error"></p>
   `;
+}
+
+const isInFolder = (path, folder) => path.replace(/\\/g, '/').startsWith(folder + '/');
+
+function trackTreeMarkup(paths, folderStates) {
+  const parents = paths.map((p) => p.replace(/\\/g, '/').split('/').slice(0, -1));
+  let shared = parents[0]?.length || 0;
+  for (const parts of parents)
+    while (shared && parts.slice(0, shared).join('/') !== parents[0].slice(0, shared).join('/'))
+      shared--;
+  const root = { folders: new Map(), files: [] };
+  paths.forEach((path, index) => {
+    const parts = parents[index];
+    let node = root;
+    // Show the common parent once, then its subfolders. Keep the stored playback order intact.
+    for (let depth = Math.max(0, shared - 1); depth < parts.length; depth++) {
+      if (!parts[depth]) continue;
+      const key = parts.slice(0, depth + 1).join('/');
+      if (!node.folders.has(key))
+        node.folders.set(key, {
+          name: parts[depth],
+          folders: new Map(),
+          files: [],
+          count: 0,
+        });
+      node = node.folders.get(key);
+      node.count++;
+    }
+    node.files.push({ path, index });
+  });
+  const markup = (node) =>
+    [...node.folders]
+      .map(
+        ([key, folder], index, siblings) => `
+    <details class="file-folder" data-folder="${esc(key)}" ${folderStates.get(key) !== false ? 'open' : ''}>
+      <summary title="${esc(key)}"><span>${esc(folder.name)}</span><small>${folder.count} file${folder.count === 1 ? '' : 's'}</small>
+        <button type="button" data-folder-up="${esc(key)}" data-folder-target="${esc(siblings[index - 1]?.[0] || '')}" aria-label="Move ${esc(folder.name)} folder up" ${index === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" data-folder-down="${esc(key)}" data-folder-target="${esc(siblings[index + 1]?.[0] || '')}" aria-label="Move ${esc(folder.name)} folder down" ${index === siblings.length - 1 ? 'disabled' : ''}>↓</button>
+        <button type="button" data-folder-first="${esc(key)}" aria-label="Move ${esc(folder.name)} folder to first" ${paths.slice(0, folder.count).every((path) => isInFolder(path, key)) ? 'disabled' : ''}>⇈ First</button>
+      </summary>
+      <div class="folder-files">${markup(folder)}</div>
+    </details>`,
+      )
+      .join('') +
+    node.files
+      .map(({ path, index }) => {
+        const name = path
+          .split(/[\\/]/)
+          .at(-1)
+          .replace(/\.[^.]+$/, '');
+        return `<div class="file-row" data-track-path="${esc(path)}">
+        <small class="file-number">${String(index + 1).padStart(2, '0')}</small>
+        <span title="${esc(path)}">${esc(name)}</span><div class="file-row-actions">
+          <button type="button" data-up="${index}" aria-label="Move ${esc(name)} up" ${index === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" data-down="${index}" aria-label="Move ${esc(name)} down" ${index === paths.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" data-remove="${index}" aria-label="Remove ${esc(name)}">Remove</button>
+        </div></div>`;
+      })
+      .join('');
+  return markup(root);
 }
 
 function stationEditor(station = null, paths = []) {
@@ -800,14 +931,53 @@ function stationEditor(station = null, paths = []) {
       .split(/[\\/]/)
       .at(-1)
       .replace(/\.[^.]+$/, '');
+  const separate = () => !station && $('#newGrouping').value === 'separate';
+  const folderStates = new Map();
   const listFiles = () => {
-    $('#fileCount').textContent = `${importPaths.length} audio files`;
-    $('#fileList').innerHTML = importPaths
-      .map(
-        (p, i) =>
-          `<div class="file-row"><span title="${esc(p)}">${esc(basename(p))}</span><button type="button" data-remove="${i}">Remove</button></div>`,
-      )
-      .join('');
+    $('#fileCount').textContent =
+      `${importPaths.length} audio file${importPaths.length === 1 ? '' : 's'}`;
+    const list = $('#fileList');
+    const scrollTop = list.scrollTop;
+    for (const folder of list.querySelectorAll('[data-folder]'))
+      folderStates.set(folder.dataset.folder, folder.open);
+    list.innerHTML =
+      trackTreeMarkup(importPaths, folderStates) ||
+      '<div class="file-drop-zone">Drop audio files here, or use Add files / Add folder.</div>';
+    list.scrollTop = scrollTop;
+    for (const direction of ['up', 'down']) {
+      list.querySelectorAll(`[data-folder-${direction}]`).forEach((button) => {
+        button.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const folder = button.dataset[direction === 'up' ? 'folderUp' : 'folderDown'];
+          const target = button.dataset.folderTarget;
+          if (!target) return;
+          const moving = importPaths.filter((path) => isInFolder(path, folder));
+          const remaining = importPaths.filter((path) => !isInFolder(path, folder));
+          const positions = remaining
+            .map((path, index) => (isInFolder(path, target) ? index : -1))
+            .filter((index) => index >= 0);
+          const insertAt = direction === 'up' ? positions[0] : positions.at(-1) + 1;
+          remaining.splice(insertAt, 0, ...moving);
+          importPaths = remaining;
+          listFiles();
+        };
+      });
+    }
+    list.querySelectorAll('[data-folder-first]').forEach((button) => {
+      button.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const folder = button.dataset.folderFirst;
+        // Stable partition includes subfolders and preserves each recording's relative order.
+        importPaths = [
+          ...importPaths.filter((path) => isInFolder(path, folder)),
+          ...importPaths.filter((path) => !isInFolder(path, folder)),
+        ];
+        listFiles();
+        list.scrollTop = 0;
+      };
+    });
     document.querySelectorAll('[data-remove]').forEach(
       (b) =>
         (b.onclick = () => {
@@ -815,6 +985,16 @@ function stationEditor(station = null, paths = []) {
           listFiles();
         }),
     );
+    for (const direction of ['up', 'down'])
+      document.querySelectorAll(`[data-${direction}]`).forEach((button) => {
+        button.onclick = () => {
+          const index = Number(button.dataset[direction]);
+          const next = index + (direction === 'up' ? -1 : 1);
+          [importPaths[index], importPaths[next]] = [importPaths[next], importPaths[index]];
+          listFiles();
+        };
+      });
+    updateForm();
   };
   editor(
     station ? 'Edit station' : 'Create station',
@@ -822,8 +1002,10 @@ function stationEditor(station = null, paths = []) {
     () => {
       const name = $('#newName').value.trim(),
         mode = $('#newMode').value;
-      if (!name || !importPaths.length) {
-        $('#editorError').textContent = 'Enter a name and add at least one audio file.';
+      if ((!separate() && !name) || !importPaths.length) {
+        $('#editorError').textContent = separate()
+          ? 'Add at least one audio file.'
+          : 'Enter a name and add at least one audio file.';
         return false;
       }
       const customFade = mode === 'tracks' && !$('#useGlobalFade').checked;
@@ -851,13 +1033,12 @@ function stationEditor(station = null, paths = []) {
               ),
           );
       }
-      const entries =
-        !station && mode === 'longset'
-          ? importPaths.map((p) => ({
-              name: importPaths.length === 1 ? name : basename(p),
-              paths: [p],
-            }))
-          : [{ name, paths: importPaths }];
+      const entries = separate()
+        ? importPaths.map((p) => ({
+            name: basename(p),
+            paths: [p],
+          }))
+        : [{ name, paths: importPaths }];
       for (const entry of entries) {
         const key = station?.key || `custom:${crypto.randomUUID()}`;
         custom.push({
@@ -865,16 +1046,18 @@ function stationEditor(station = null, paths = []) {
           game: station?.game || '',
           station: entry.name,
           mode,
+          textMode: $('#textMode').value,
           // Store seconds internally so existing stations.json values remain compatible.
           crossfade: override === '' ? null : Number(override),
-          spinLogo: $('#spinLogo').checked,
-          bannerPath,
-          bannerColor: $('#useBannerColor').checked ? $('#bannerColor').value : '',
-          bannerAccent: bannerPath ? bannerAccent : '',
+          spinLogo: !separate() && $('#spinLogo').checked,
+          bannerPath: separate() ? '' : bannerPath,
+          bannerColor: !separate() && $('#useBannerColor').checked ? $('#bannerColor').value : '',
+          bannerAccent: !separate() && bannerPath ? bannerAccent : '',
+          accent: !separate() && $('#useStationAccent').checked ? $('#stationAccent').value : '',
           custom: true,
           tracks: entry.paths.map((p) => ({ path: p, name: basename(p) })),
         });
-        if (logoPath) logos[key] = logoPath;
+        if (logoPath && !separate()) logos[key] = logoPath;
         else delete logos[key];
       }
       stations = [
@@ -890,25 +1073,144 @@ function stationEditor(station = null, paths = []) {
     },
   );
   $('#newMode').value = station?.mode || 'tracks';
+  $('#textMode').value = station?.textMode || 'auto';
+  const updatePreview = () => {
+    $('#previewName').textContent = $('#newName').value.trim() || 'YOUR STATION';
+    $('#previewMode').textContent =
+      $('#newMode').value === 'longset' ? 'BROADCAST · IN ORDER · LOOP' : 'MUSIC · SHUFFLE';
+    $('#stationPreview').style.backgroundColor = $('#useBannerColor').checked
+      ? $('#bannerColor').value
+      : '#0b1513';
+    $('#stationPreview').style.color = $('#useStationAccent').checked
+      ? $('#stationAccent').value
+      : settings.accent;
+    $('#previewBanner').hidden = !bannerPath;
+    if (bannerPath) $('#previewBanner').src = url(bannerPath);
+    $('#previewLogo').hidden = !logoPath;
+    $('#previewPlaceholder').hidden = !!logoPath;
+    if (logoPath) $('#previewLogo').src = url(logoPath);
+    $('#removeLogo').disabled = !logoPath;
+    $('#removeBanner').disabled = !bannerPath;
+    $('#stationAccent').disabled = !$('#useStationAccent').checked;
+  };
   const updateCrossfadeVisibility = () => {
     $('#crossfadeField').hidden = $('#newMode').value !== 'tracks';
     const disabled = $('#useGlobalFade').checked || $('#crossfadeField').hidden;
     $('#stationFade').disabled = disabled;
     $('#stationFadeLabel').classList.toggle('disabled-field', disabled);
   };
-  $('#newMode').onchange = updateCrossfadeVisibility;
+  const updateForm = () => {
+    const batch = separate();
+    for (const selector of ['#stationIdentity', '#stationAppearance', '#stationPreview'])
+      $(selector).hidden = batch;
+    if ($('#creationPreview'))
+      $('#creationPreview').textContent = batch
+        ? `${importPaths.length} station${importPaths.length === 1 ? '' : 's'} will be created, named after their files. Add logos and banners afterwards in Edit station.`
+        : 'All files share one name, logo, and playback style.';
+    $('#editorSave').textContent = station
+      ? 'Save changes'
+      : batch
+        ? `Create ${importPaths.length} stations`
+        : 'Create station';
+    const broadcast = $('#newMode').value === 'longset';
+    $('#fileOrderHelp').hidden = !broadcast || batch;
+    $('#playbackHelp').textContent = broadcast
+      ? 'Recordings play in the order below, then loop. Timestamps supply song titles by default.'
+      : 'Files play in a shuffled order. Timestamps supply lyrics by default.';
+    $('#textModeHelp').textContent =
+      `Default from playback style: ${broadcast ? 'Track titles' : 'Lyrics'}. This applies to every file in the station.`;
+    document
+      .querySelectorAll('[data-preset]')
+      .forEach((button) =>
+        button.setAttribute('aria-pressed', String(button.dataset.preset === $('#newMode').value)),
+      );
+    if (broadcast) $('#broadcastSuggestion').hidden = true;
+    updateCrossfadeVisibility();
+    updatePreview();
+  };
+  $('#newMode').onchange = updateForm;
+  if ($('#newGrouping')) $('#newGrouping').onchange = updateForm;
+  document.querySelectorAll('[data-preset]').forEach((button) => {
+    button.onclick = () => {
+      $('#newMode').value = button.dataset.preset;
+      $('#textMode').value = 'auto';
+      $('#useGlobalFade').checked = true;
+      updateForm();
+    };
+  });
+  $('#acceptBroadcast').onclick = () => {
+    $('#newMode').value = 'longset';
+    updateForm();
+  };
+  $('#newName').oninput = updatePreview;
+  $('#stationAccent').oninput = updatePreview;
+  $('#useStationAccent').onchange = updatePreview;
+  $('#resetAccent').onclick = () => {
+    $('#useStationAccent').checked = false;
+    updatePreview();
+  };
   $('#useGlobalFade').onchange = updateCrossfadeVisibility;
   const updateBannerColor = () => {
     $('#bannerColor').disabled = !$('#useBannerColor').checked;
+    updatePreview();
   };
+  $('#bannerColor').oninput = updatePreview;
   $('#useBannerColor').onchange = updateBannerColor;
   updateBannerColor();
   updateCrossfadeVisibility();
   listFiles();
+  // Check a small sample without delaying setup or scanning the entire library.
+  const modeField = $('#newMode');
+  const inspected = new Set();
+  const suggestBroadcast = async () => {
+    if (station) return;
+    const sample = importPaths.filter((p) => !inspected.has(p)).slice(0, 3);
+    sample.forEach((p) => inspected.add(p));
+    const hints = await Promise.all(
+      sample.map(async (p) => {
+        try {
+          const [raw, length] = await Promise.all([window.radio.readSidecar(p), probe(p)]);
+          return parse(raw)?.timed?.length > 0 || length >= 20 * 60;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    if (
+      $('#newMode') === modeField &&
+      $('#editor').open &&
+      $('#newMode').value === 'tracks' &&
+      hints.some(Boolean)
+    )
+      $('#broadcastSuggestion').hidden = false;
+  };
+  suggestBroadcast();
+  $('#editor').ondrop = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      // FileList loses its entries across the context bridge; File arrays retain disk paths.
+      const paths = await window.radio.pathsForFiles(Array.from(event.dataTransfer.files));
+      if ($('#newMode') !== modeField || !$('#editor').open) return;
+      if (!paths.length) {
+        $('#editorError').textContent =
+          'Drop audio files (MP3, M4A, AAC, OGG, WAV, or FLAC). To import a folder, use Add folder.';
+        return;
+      }
+      $('#editorError').textContent = '';
+      importPaths = [...new Set([...importPaths, ...paths])];
+      listFiles();
+      suggestBroadcast();
+    } catch (error) {
+      if ($('#newMode') === modeField && $('#editor').open)
+        $('#editorError').textContent = `Could not import files: ${error.message}`;
+    }
+  };
   $('#browseFiles').onclick = async () => {
     const files = await window.radio.chooseFiles();
     importPaths = [...new Set([...importPaths, ...files])];
     listFiles();
+    suggestBroadcast();
   };
   $('#browseFolder').onclick = async () => {
     const folder = await window.radio.chooseAudioFolder();
@@ -916,17 +1218,20 @@ function stationEditor(station = null, paths = []) {
     if (!$('#newName').value.trim()) $('#newName').value = folder.name;
     importPaths = [...new Set([...importPaths, ...folder.files])];
     listFiles();
+    suggestBroadcast();
   };
   $('#browseLogo').onclick = async () => {
     const p = await window.radio.chooseImage();
     if (p) {
       logoPath = p;
       $('#logoName').textContent = p;
+      updatePreview();
     }
   };
   $('#removeLogo').onclick = () => {
     logoPath = '';
     $('#logoName').textContent = 'None';
+    updatePreview();
   };
   $('#browseBanner').onclick = async () => {
     try {
@@ -935,6 +1240,7 @@ function stationEditor(station = null, paths = []) {
         bannerPath = result.path;
         bannerAccent = result.accent;
         $('#bannerName').textContent = bannerPath;
+        updatePreview();
       }
     } catch (error) {
       $('#editorError').textContent = `Could not open banner: ${error.message}`;
@@ -944,7 +1250,10 @@ function stationEditor(station = null, paths = []) {
     bannerPath = '';
     bannerAccent = '';
     $('#bannerName').textContent = 'No banner image';
+    updatePreview();
   };
+  $('#newName').focus({ preventScroll: true });
+  $('#editorBody').scrollTop = 0;
   if (station)
     $('#deleteStation').onclick = () => {
       custom = custom.filter((s) => s.key !== station.key);
@@ -1104,7 +1413,7 @@ function manageStations() {
       return true;
     },
   );
-  $('#editorSave').textContent = 'Delete selected';
+  $('#editorSave').classList.add('danger');
   const deleteSelected = $('#editorSave').onclick;
   $('#editorSave').onclick = () => {
     const count = document.querySelectorAll('.bulk-station:checked').length;
@@ -1117,9 +1426,16 @@ function manageStations() {
       deleteSelected();
   };
   const update = () => {
-    $('#bulkCount').textContent =
-      `${document.querySelectorAll('.bulk-station:checked').length} selected`;
+    const count = document.querySelectorAll('.bulk-station:checked').length;
+    $('#bulkCount').textContent = `${count} selected`;
+    $('#editorSave').disabled = count === 0;
+    $('#editorSave').textContent = count
+      ? `Delete ${count} station${count === 1 ? '' : 's'}`
+      : 'Delete selected';
+    $('#selectAllStations').checked = count > 0 && count === entries.length;
+    $('#selectAllStations').indeterminate = count > 0 && count < entries.length;
   };
+  update();
   $('#selectAllStations').onchange = (e) => {
     document.querySelectorAll('.bulk-station').forEach((box) => (box.checked = e.target.checked));
     update();
@@ -1144,6 +1460,22 @@ $('#homeButton').onclick = () => {
   $('#homeView').hidden = false;
 };
 $('#manageStations').onclick = manageStations;
+$('#stationSearch').oninput = render;
+for (const button of document.querySelectorAll('[data-settings-tab]')) {
+  button.onclick = () => {
+    for (const tab of document.querySelectorAll('[data-settings-tab]'))
+      tab.setAttribute('aria-pressed', String(tab === button));
+    for (const panel of document.querySelectorAll('[data-settings-panel]'))
+      panel.hidden = panel.dataset.settingsPanel !== button.dataset.settingsTab;
+  };
+}
+for (const key of ['listDensity', 'showScanlines', 'reduceMotion', 'showProgress']) {
+  $('#' + key).onchange = (event) => {
+    settings[key] = key === 'listDensity' ? event.target.value : event.target.checked;
+    applySettings();
+    save();
+  };
+}
 $('#openSettings').onclick = () => {
   $('#homeView').hidden = true;
   $('#playerView').hidden = true;
@@ -1225,15 +1557,57 @@ $('#play').onclick = () => {
 };
 $('#prev').onclick = () => step(-1);
 $('#next').onclick = () => step(1);
-$('#volume').oninput = (e) => {
-  audio.volume = e.target.value / 100;
-  staticAudio.volume = e.target.value / 200;
+let muted = false;
+function updateVolume() {
+  const value = Number($('#volume').value);
+  if (!fading) audio.volume = value / 100;
+  staticAudio.volume = value / 200;
+  for (const element of [audio, spare, staticAudio]) element.muted = muted;
+  $('#volumeValue').textContent = muted ? 'MUTE' : `${value}%`;
+  $('#volume').setAttribute('aria-valuetext', `${value} percent${muted ? ', muted' : ''}`);
+  $('#mute').setAttribute('aria-pressed', String(muted));
+  $('#mute').setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+  $('#mute').textContent = muted || value === 0 ? '◖×' : '◖))';
+  const count = muted ? 0 : Math.round((value * 12) / 100);
+  document
+    .querySelectorAll('.volume-segments i')
+    .forEach((segment, index) => segment.classList.toggle('lit', index < count));
+}
+function changeVolume(delta) {
+  $('#volume').value = Math.max(0, Math.min(100, Number($('#volume').value) + delta));
+  muted = false;
+  updateVolume();
+}
+$('.volume-segments').innerHTML = '<i></i>'.repeat(12);
+$('#volume').oninput = () => {
+  muted = false;
+  updateVolume();
 };
-audio.volume = 0.8;
+$('#mute').onclick = () => {
+  if (Number($('#volume').value) === 0) {
+    $('#volume').value = 80;
+    muted = false;
+  } else muted = !muted;
+  updateVolume();
+};
+$('.volume-module').addEventListener(
+  'wheel',
+  (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.deltaY) changeVolume(event.deltaY < 0 ? 5 : -5);
+  },
+  { passive: false },
+);
+updateVolume();
 for (const element of [audio, spare]) {
   element.addEventListener('timeupdate', () => {
     if (element !== audio) return;
     $('#time').textContent = `${fmt(audio.currentTime)} / ${fmt(audio.duration)}`;
+    $('#recordingProgress').value =
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.currentTime / audio.duration
+        : 0;
     metadata();
     if (
       currentClock?.fade &&
@@ -1283,9 +1657,47 @@ for (const element of [audio, spare]) {
     }
   });
 }
+const stationMediaActions = {
+  nexttrack: () => step(1),
+  previoustrack: () => step(-1),
+  play: () => {
+    if (audio.paused) $('#play').click();
+  },
+  pause: () => {
+    if (!audio.paused) $('#play').click();
+  },
+};
+for (const [action, handler] of Object.entries(stationMediaActions))
+  navigator.mediaSession?.setActionHandler(action, handler);
+
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'MediaPlayPause') {
+    e.preventDefault();
+    $('#play').click();
+    return;
+  }
+  const mediaAction = {
+    MediaTrackNext: 'nexttrack',
+    MediaTrackPrevious: 'previoustrack',
+    MediaPlay: 'play',
+    MediaPause: 'pause',
+  }[e.key];
+  if (mediaAction) {
+    e.preventDefault();
+    stationMediaActions[mediaAction]();
+    return;
+  }
   if ($('#editor').open || !$('#settingsView').hidden || e.target.matches('input,select,textarea'))
     return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (['+', '=', '-', '_'].includes(e.key)) {
+    e.preventDefault();
+    changeVolume(e.key === '+' || e.key === '=' ? 5 : -5);
+  }
+  if (e.key.toLowerCase() === 'm') {
+    e.preventDefault();
+    $('#mute').click();
+  }
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault();
     step(e.key === 'ArrowUp' ? -1 : 1);
@@ -1306,15 +1718,29 @@ $('#playerView').addEventListener(
   },
   { passive: true },
 );
-document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer?.types.includes('Files')) {
+    e.dataTransfer.dropEffect = 'copy';
+    document.documentElement.classList.add('file-drag-active');
+  }
+});
+const clearDropHighlight = () => document.documentElement.classList.remove('file-drag-active');
+document.addEventListener('drop', clearDropHighlight, true);
+document.addEventListener('dragend', clearDropHighlight);
+document.addEventListener('dragleave', (event) => {
+  if (!event.relatedTarget) clearDropHighlight();
+});
 document.addEventListener('drop', async (e) => {
   e.preventDefault();
-  if ($('#editor').open) return;
+  if ($('#editor').open || !e.dataTransfer.files.length) return;
   try {
-    const paths = (await window.radio.pathsForFiles(e.dataTransfer.files)).filter((p) =>
+    const paths = (await window.radio.pathsForFiles(Array.from(e.dataTransfer.files))).filter((p) =>
       /\.(mp3|m4a|aac|ogg|wav|flac)$/i.test(p),
     );
+    if ($('#editor').open) return;
     if (paths.length) stationEditor(null, paths);
+    else $('#libraryPath').textContent = 'Drop audio files, or use Create station → Add folder.';
   } catch (error) {
     $('#libraryPath').textContent = `Could not import files: ${error.message}`;
   }

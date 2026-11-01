@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="editor.css" />
     <link rel="stylesheet" href="home.css" />
     <link rel="stylesheet" href="settings.css" />
+    <link rel="stylesheet" href="customization.css" />
   </head>
   <body>
     <main>
@@ -35,6 +36,12 @@
           <button id="newGroup" title="Create group" aria-label="Create group">＋</button>
           <button id="editGroup" title="Edit group" aria-label="Edit group">✎</button>
         </div>
+        <input
+          id="stationSearch"
+          type="search"
+          placeholder="Search stations…"
+          aria-label="Search stations"
+        />
         <nav id="stationList" aria-label="Radio stations">
           <div class="empty">Loading stations…</div>
         </nav>
@@ -43,43 +50,102 @@
         <section id="settingsView" hidden>
           <p class="home-kicker">PREFERENCES</p>
           <h1>Settings</h1>
-          <h2>Appearance</h2>
-          <label>
-            Accent color
-            <input id="accentColor" type="color" value="#c7f464" />
-          </label>
-          <label class="checkbox-setting">
-            <input id="matchBannerAccent" type="checkbox" />
-            Match player accent to each station banner
-          </label>
-          <p>The accent softly changes when you tune to a station with a banner image or color.</p>
-          <label>
-            Long title bounce speed
-            <input id="bounceSpeed" type="number" min="10" max="200" step="5" value="40" />
-            pixels per second
-          </label>
-          <h2>Playback</h2>
-          <label>
-            Global crossfade for individual tracks
-            <input id="globalFade" type="number" min="0" max="30" step="0.5" value="0" />
-            seconds
-          </label>
-          <p>Station crossfade choices are set in Edit station. A value of 0 disables crossfade.</p>
-          <h2>Tuning sound</h2>
-          <label>
-            Static noise while tuning
-            <span id="staticName">Bundled static</span>
-          </label>
-          <div class="settings-actions">
-            <button id="chooseStatic">Choose audio file</button>
-            <button id="useBundledStatic">Use bundled</button>
-            <button id="clearStatic">Disable</button>
-          </div>
-          <h2>Files and data</h2>
-          <div class="settings-actions">
-            <button id="showConfig">Open stations.json</button>
-            <button id="settingsBack">← Back to stations</button>
-          </div>
+          <nav class="settings-tabs" aria-label="Settings categories">
+            <button type="button" data-settings-tab="general" aria-pressed="true">General</button>
+            <button type="button" data-settings-tab="appearance" aria-pressed="false">
+              Appearance
+            </button>
+            <button type="button" data-settings-tab="playback" aria-pressed="false">
+              Playback
+            </button>
+            <button type="button" data-settings-tab="advanced" aria-pressed="false">
+              Advanced
+            </button>
+          </nav>
+          <section data-settings-panel="general">
+            <h2>Your radio, your way</h2>
+            <p>
+              Create a Music station for shuffled songs, or a Radio broadcast for recordings that
+              play in order. Each station can override the defaults in its editor.
+            </p>
+            <p>
+              ↑ / ↓ tune stations · Space plays or pauses · + / − adjust volume · M mutes. Scroll
+              over the volume meter to adjust it.
+            </p>
+            <p>Preferences save automatically.</p>
+          </section>
+          <section data-settings-panel="appearance" hidden>
+            <h2>Appearance</h2>
+            <label>
+              Accent color
+              <input id="accentColor" type="color" value="#c7f464" />
+            </label>
+            <label>
+              Station list spacing
+              <select id="listDensity">
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <label class="checkbox-setting">
+              <input id="showScanlines" type="checkbox" checked />
+              Display scanlines
+            </label>
+            <label class="checkbox-setting">
+              <input id="reduceMotion" type="checkbox" />
+              Reduce motion (titles and logos)
+            </label>
+            <label class="checkbox-setting">
+              <input id="showProgress" type="checkbox" checked />
+              Show recording progress
+            </label>
+            <label class="checkbox-setting">
+              <input id="matchBannerAccent" type="checkbox" />
+              Match player accent to each station banner
+            </label>
+            <p>
+              The accent softly changes when you tune to a station with a banner image or color.
+            </p>
+            <label>
+              Long title bounce speed
+              <input id="bounceSpeed" type="number" min="10" max="200" step="5" value="40" />
+              pixels per second
+            </label>
+          </section>
+          <section data-settings-panel="playback" hidden>
+            <h2>Playback</h2>
+            <label>
+              Default crossfade for shuffled tracks
+              <input id="globalFade" type="number" min="0" max="30" step="0.5" value="0" />
+              seconds
+            </label>
+            <p>
+              Station crossfade choices are set in Edit station. A value of 0 disables crossfade.
+            </p>
+            <h2>Tuning sound</h2>
+            <label>
+              Static noise while tuning
+              <span id="staticName">Bundled static</span>
+            </label>
+            <div class="settings-actions">
+              <button id="chooseStatic">Choose audio file</button>
+              <button id="useBundledStatic">Use bundled</button>
+              <button id="clearStatic">Disable</button>
+            </div>
+          </section>
+          <section data-settings-panel="advanced" hidden>
+            <h2>Timestamped text</h2>
+            <p>
+              Broadcasts use timestamped sidecars as song titles; shuffled stations use them as
+              lyrics. Override this per station under Advanced. Text without valid timestamps is
+              never displayed in the player.
+            </p>
+            <h2>Files and data</h2>
+            <div class="settings-actions">
+              <button id="showConfig">Open stations.json</button>
+            </div>
+          </section>
+          <button id="settingsBack" class="settings-back">← Back to stations</button>
         </section>
         <section id="homeView">
           <p class="home-kicker">YOUR RADIO</p>
@@ -101,6 +167,12 @@
             <div class="station-sub" id="stationSub">Your local radio archive</div>
           </div>
           <button id="editStation" class="logo-action">Edit station</button>
+          <progress
+            id="recordingProgress"
+            max="1"
+            value="0"
+            aria-label="Recording progress (read only)"
+          ></progress>
           <section class="now">
             <div class="on-air">
               <i></i>
@@ -119,11 +191,19 @@
               ▶
             </button>
             <button id="next" title="Next station" aria-label="Next station">▶▶</button>
-            <input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
             <output id="time" aria-label="Playback time">00:00 / 00:00</output>
+            <div class="volume-module" title="Volume: + / − · M to mute · Scroll to adjust">
+              <button id="mute" type="button" aria-label="Mute" aria-pressed="false">◖))</button>
+              <label for="volume">VOL</label>
+              <div class="volume-meter">
+                <div class="volume-segments" aria-hidden="true"></div>
+                <input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+              </div>
+              <output id="volumeValue" for="volume">80%</output>
+            </div>
           </section>
           <p class="how">
-            Broadcast files loop continuously. Multi-track stations play in a shuffled order.
+            Your station keeps its own clock. Tune in wherever the broadcast is playing.
           </p>
         </div>
       </section>

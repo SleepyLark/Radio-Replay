@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('radio', {
   saveConfig: (config) => ipcRenderer.invoke('config:save', config),
   showConfig: () => ipcRenderer.invoke('config:show'),
   bundledStatic: () => ipcRenderer.invoke('static:bundled'),
+  // The renderer must supply an Array<File>; a DOM FileList loses entries across the bridge.
   pathsForFiles: async (files) => {
     const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter((filePath) =>
       /\.(mp3|m4a|aac|ogg|wav|flac)$/i.test(filePath),
