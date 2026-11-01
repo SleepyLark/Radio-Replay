@@ -9,7 +9,11 @@ const profilePath = path.join(__dirname, '..', 'out', 'smoke-profile');
 require('node:fs').mkdirSync(profilePath, { recursive: true });
 app.setPath('userData', profilePath);
 let savedConfig;
+let startupConfig = null;
 let droppedPaths = [];
+let probeCache;
+let clockLookups = 0;
+const durationFixture = path.join(profilePath, 'duration-probe.mp3');
 
 for (const [channel, response] of [
   ['static:bundled', path.join(__dirname, '..', 'assets', 'audio', 'static.mp3')],
@@ -20,6 +24,7 @@ for (const [channel, response] of [
   ipcMain.handle(channel, (event, payload) => {
     if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
     if (channel === 'config:save') savedConfig = payload;
+    if (channel === 'config:load') return startupConfig;
     return response;
   });
 ipcMain.handle('sidecar:read', (event, file) => {
@@ -36,6 +41,22 @@ ipcMain.handle('sidecar:read', (event, file) => {
 ipcMain.handle('files:registerDrop', (event, paths) => {
   if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
   droppedPaths = paths;
+});
+ipcMain.handle('duration:lookup', (event, file) => {
+  if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
+  if (file === durationFixture) return probeCache.lookup(file);
+  if (file.includes('clock-changing'))
+    return { available: true, duration: ++clockLookups === 1 ? 120 : 180 };
+  return { available: true, duration: file.includes('second') ? 180 : 120 };
+});
+ipcMain.handle('duration:remember', (event, file, signature, duration) => {
+  if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
+  return file === durationFixture ? probeCache.remember(file, signature, duration) : true;
+});
+ipcMain.handle('duration:clear', (event) => {
+  if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
+  probeCache.clear();
+  return true;
 });
 
 app.whenReady().then(async () => {
@@ -54,6 +75,17 @@ app.whenReady().then(async () => {
     process.stderr.write(`Preload error in ${preloadPath}: ${error.stack || error}\n`);
   });
   try {
+    // Exercise the bundled Electron runtime's SQLite support, not just the Node test runner.
+    const { DurationCache } = require('../src/duration-cache.cjs');
+    const cacheFile = path.join(profilePath, 'test-duration-cache.sqlite');
+    let cache = new DurationCache(cacheFile);
+    const fixture = path.join(__dirname, '..', 'assets', 'audio', 'static.mp3');
+    await cache.remember(fixture, await cache.lookup(fixture), 12.34);
+    cache.close();
+    cache = new DurationCache(cacheFile);
+    if ((await cache.lookup(fixture)).duration !== 12.34)
+      throw new Error('Persistent duration cache failed in Electron');
+    cache.close();
     const mask = nativeImage.createFromPath(
       path.join(__dirname, '..', 'assets', 'icons', 'tray-mask.png'),
     );
@@ -67,6 +99,27 @@ app.whenReady().then(async () => {
     )
       throw new Error('Tray icon could not be loaded');
     await window.loadFile(indexPath);
+    await fs.copyFile(fixture, durationFixture);
+    probeCache = new DurationCache(path.join(profilePath, 'renderer-duration-cache.sqlite'));
+    // This fixture must start cold even when the smoke profile survives a previous run.
+    probeCache.open();
+    await probeCache.retain([]);
+    const durationState = await window.webContents.executeJavaScript(`(async () => {
+      const OriginalAudio = window.Audio;
+      let probes = 0;
+      window.Audio = function(...args) { probes++; return new OriginalAudio(...args); };
+      try {
+        const first = await probe(${JSON.stringify(durationFixture)});
+        const second = await probe(${JSON.stringify(durationFixture)});
+        return { first, second, probes };
+      } finally { window.Audio = OriginalAudio; }
+    })()`);
+    if (
+      !(durationState.first > 0) ||
+      durationState.second !== durationState.first ||
+      durationState.probes !== 1
+    )
+      throw new Error('Duration probe was not cached: ' + JSON.stringify(durationState));
     const result = await window.webContents.executeJavaScript(String.raw`(async () => {
       await Promise.all([
         document.fonts.load('400 12px "DM Mono"'),
@@ -132,7 +185,6 @@ app.whenReady().then(async () => {
       throw new Error(`Tuning details were not cleared: ${JSON.stringify(tuningState)}`);
     const playbackState = await window.webContents.executeJavaScript(String.raw`(async () => {
       const tracks = [{ path: 'C:\\Music\\first.mp3', name: 'First recording' }, { path: 'C:\\Music\\second.mp3', name: 'Second recording' }];
-      durations.set(tracks[0].path, 120); durations.set(tracks[1].path, 180);
       selected = { key: 'broadcast', station: 'Broadcast', mode: 'longset', tracks };
       await showTrackDetails(tracks[0], selected, token);
       const firstTitle = $('#trackTitle').textContent;
@@ -173,6 +225,17 @@ app.whenReady().then(async () => {
       playbackState.invalidJson
     )
       throw new Error(`Broadcast metadata failed: ${JSON.stringify(playbackState)}`);
+    const clockCacheState = await window.webContents.executeJavaScript(`(async () => {
+      const station = {key: 'clock-validation', mode: 'tracks', tracks: [{path: 'C:/Music/clock-changing.mp3', name: 'Changing'}]};
+      const first = await clockFor(station, token);
+      const changed = await clockFor(station, token);
+      const unchanged = await clockFor(station, token);
+      for (let i = 0; i < 40; i++) await clockFor({...station, key: 'bounded-clock-' + i}, token);
+      return { refreshed: first !== changed && changed.lengths[0] === 180,
+        preserved: changed === unchanged, bounded: clocks.size <= 32 };
+    })()`);
+    if (!clockCacheState.refreshed || !clockCacheState.preserved || !clockCacheState.bounded)
+      throw new Error('Clock cache validation failed: ' + JSON.stringify(clockCacheState));
     const creationState = await window.webContents.executeJavaScript(String.raw`(async () => {
       selected = null; custom = []; stations = []; groups = []; logos = {};
       const files = ['C:\\Music\\first.mp3', 'C:\\Music\\second.mp3'];
@@ -414,6 +477,130 @@ app.whenReady().then(async () => {
     })()`);
     if (Object.values(mediaState).some((value) => !value))
       throw new Error('Media station navigation failed: ' + JSON.stringify(mediaState));
+    const randomNextState = await window.webContents.executeJavaScript(`(async () => {
+      const before = {stations, selected, groups, groupId};
+      const originalRandom = Math.random;
+      const stopStep = () => {clearTimeout(stepTimer); stepTarget = null;};
+      const fixtures = ['a','b','c','d'].map(key => ({key, station: key, mode:'tracks', tracks:[]}));
+      try {
+        stations = fixtures; selected = fixtures[0]; groupId = 'all';
+        $('#randomNext').click();
+        Math.random = () => 0.999;
+        $('#next').click();
+        const random = stepTarget === fixtures[3]; stopStep();
+        stationMediaActions.nexttrack();
+        const media = stepTarget === fixtures[3]; stopStep();
+        Math.random = () => 0;
+        $('#next').click();
+        const excludesCurrent = stepTarget === fixtures[1];
+        $('#next').click();
+        const rapid = stepTarget !== fixtures[1]; stopStep();
+        $('#prev').click();
+        const previous = stepTarget === null; stopStep();
+        groups = [{id:'random-test', name:'Subset', members:['a','c']}]; groupId = 'random-test';
+        $('#next').click(); const grouped = stepTarget === fixtures[2]; stopStep();
+        groups[0].members = ['a'];
+        $('#next').click(); const single = stepTarget === fixtures[0]; stopStep();
+        groups[0].members = [];
+        $('#next').click(); const empty = stepTarget === null;
+        await save();
+        const config = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+        sanitizeConfig(config); applySettings();
+        const persisted = settings.randomNext && $('#randomNext').checked;
+        $('#randomNext').click(); groupId = 'all';
+        $('#next').click(); const sequential = stepTarget === fixtures[1]; stopStep();
+        return {random, media, excludesCurrent, rapid, previous, grouped, single, empty, persisted, sequential};
+      } finally {
+        stopStep(); Math.random = originalRandom;
+        stations = before.stations; selected = before.selected; groups = before.groups; groupId = before.groupId;
+        settings.randomNext = false; applySettings(); render();
+      }
+    })()`);
+    if (Object.values(randomNextState).some((value) => !value))
+      throw new Error('Random next station failed: ' + JSON.stringify(randomNextState));
+    const historyState = await window.webContents.executeJavaScript(`(async () => {
+      const before = {stations, selected, groups, groupId, settings: {...settings}, stationHistory, lastTunedStationKey, pendingStationVisit};
+      const originalRandom = Math.random;
+      const fixtures = ['a','b','c','d','e','f'].map(key => ({key:'history-' + key, station:key, mode:'longset', tracks:[{path:${JSON.stringify(audioPath)}, name:'Fixture'}]}));
+      const waitForStation = async key => {
+        for (let i = 0; i < 150; i++) {
+          if (selected?.key === key && !pendingStationVisit && !audio.paused) return;
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        throw new Error('History tune timed out: ' + key);
+      };
+      const baseline = async () => {
+        resetStationHistory();
+        for (const station of fixtures.slice(0, 3)) await tune(station);
+      };
+      try {
+        settings.randomNext = true; settings.staticPath = 'off'; settings.tuningTransition = false;
+        audio.muted = true; staticAudio.muted = true;
+        stations = fixtures; groups = []; groupId = 'all'; resetStationHistory();
+        for (const station of fixtures.slice(0, 4)) await tune(station);
+        const bounded = stationHistory.keys.join(',') === 'history-b,history-c,history-d';
+        $('#prev').click(); await waitForStation('history-c');
+        stationMediaActions.previoustrack(); await waitForStation('history-b');
+        $('#prev').click();
+        const backLimit = !stepTarget && selected.key === 'history-b';
+        $('#next').click(); await waitForStation('history-c');
+        stationMediaActions.nexttrack(); await waitForStation('history-d');
+        const forward = stationHistory.cursor === 2;
+        Math.random = () => 0;
+        $('#next').click(); await waitForStation('history-a');
+        const randomResumed = stationHistory.keys.join(',') === 'history-c,history-d,history-a';
+        $('#prev').click(); await waitForStation('history-d');
+        await tune(fixtures[1]);
+        const branched = stationHistory.keys.join(',') === 'history-c,history-d,history-b' && stationHistory.cursor === 2;
+        await baseline();
+        const keysBefore = stationHistory.keys.join(',');
+        Math.random = () => 0.999; $('#next').click();
+        Math.random = () => 0.75; $('#next').click();
+        const queuedOnly = stationHistory.keys.join(',') === keysBefore;
+        await waitForStation('history-d');
+        const noPhantom = !stationHistory.keys.includes('history-f') && stationHistory.keys.join(',') === 'history-b,history-c,history-d';
+        await baseline();
+        const originalPlay = audio.play;
+        let playing;
+        const aboutToCommit = new Promise(resolve => {playing = resolve;});
+        audio.play = async function() { await originalPlay.call(this); playing(); await new Promise(resolve => setTimeout(resolve, 80)); };
+        let debounceRace;
+        try {
+          const pending = tune(fixtures[5]);
+          await aboutToCommit;
+          $('#prev').click();
+          await pending;
+          await waitForStation('history-c');
+          debounceRace = stationHistory.keys.join(',') === 'history-b,history-c,history-f' && stationHistory.cursor === 1;
+        } finally { audio.play = originalPlay; }
+        $('#next').click(); await waitForStation('history-f');
+        debounceRace = debounceRace && stationHistory.cursor === 2;
+        await baseline(); stations = fixtures.filter(station => station.key !== 'history-b');
+        $('#prev').click(); await waitForStation('history-a');
+        $('#next').click(); await waitForStation('history-c');
+        const deletedSkipped = stationHistory.cursor === 2;
+        const oldKeys = stationHistory.keys.join(',');
+        await tune({key:'failed-history', station:'Missing', mode:'tracks', tracks:[]});
+        const failedIgnored = stationHistory.keys.join(',') === oldKeys && lastTunedStationKey === 'history-c';
+        $('#prev').click(); await waitForStation('history-c');
+        const failedUndone = selected.key === lastTunedStationKey;
+        groups = [{id:'history-group',name:'Subset',members:['history-c']}]; render();
+        $('#groupSelect').value = 'history-group'; $('#groupSelect').dispatchEvent(new Event('change'));
+        await waitForStation('history-c');
+        $('#prev').click();
+        const groupReset = !stepTarget && stationHistory.keys.join(',') === 'history-c' && stationHistory.group === groupId;
+        return {bounded, backLimit, forward, randomResumed, branched, queuedOnly, noPhantom, debounceRace, deletedSkipped, failedIgnored, failedUndone, groupReset};
+      } finally {
+        clearTimeout(stepTimer); stepTarget = null; stepHistoryIndex = null; ++token;
+        audio.pause(); audio.removeAttribute('src'); audio.load(); stopStatic(); currentClock = null;
+        Math.random = originalRandom; stations = before.stations; selected = before.selected;
+        groups = before.groups; groupId = before.groupId; settings = before.settings;
+        stationHistory = before.stationHistory; lastTunedStationKey = before.lastTunedStationKey; pendingStationVisit = before.pendingStationVisit;
+        applySettings(); updateVolume(); render();
+      }
+    })()`);
+    if (Object.values(historyState).some((value) => !value))
+      throw new Error('Random station history failed: ' + JSON.stringify(historyState));
     const playMediaState = await window.webContents.executeJavaScript(`(async () => {
       audio.src = url(${JSON.stringify(audioPath)}); audio.loop = true; audio.muted = true;
       await audio.play();
@@ -431,6 +618,163 @@ app.whenReady().then(async () => {
     })()`);
     if (Object.values(playMediaState).some((value) => !value))
       throw new Error('Media play/pause failed: ' + JSON.stringify(playMediaState));
+    startupConfig = {
+      version: 2,
+      root: '',
+      groups: [],
+      logos: {},
+      hidden: [],
+      custom: [
+        {
+          key: 'startup-static',
+          station: 'Startup',
+          mode: 'longset',
+          tracks: [{ path: audioPath, name: 'Fixture' }],
+        },
+      ],
+      settings: {
+        staticPath: 'bundled',
+        tuningTransition: true,
+        tuningMinMs: 200,
+        tuningMaxMs: 200,
+      },
+    };
+    const startupWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'src', 'preload.cjs'),
+        contextIsolation: true,
+        sandbox: true,
+        backgroundThrottling: false,
+      },
+    });
+    try {
+      await startupWindow.loadFile(indexPath);
+      const startupState = await startupWindow.webContents.executeJavaScript(`(async () => {
+        for (let i = 0; i < 100 && !stations.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+        staticAudio.muted = true; audio.muted = true;
+        const restored = settings.tuningTransition && $('#tuningTransition').checked;
+        const cold = staticAudio.readyState === 0;
+        let played = false;
+        staticAudio.addEventListener('playing', () => {played = true;});
+        const started = performance.now();
+        await tune(stations[0]);
+        return {restored, cold, played, elapsed: performance.now() - started, stationPlaying: !audio.paused};
+      })()`);
+      if (
+        !startupState.restored ||
+        !startupState.cold ||
+        !startupState.played ||
+        !startupState.stationPlaying ||
+        startupState.elapsed < 180 ||
+        startupState.elapsed > 1200
+      )
+        throw new Error('Saved startup static transition failed: ' + JSON.stringify(startupState));
+    } finally {
+      startupWindow.destroy();
+      startupConfig = null;
+    }
+    const staticState = await window.webContents.executeJavaScript(`(async () => {
+      staticAudio.muted = true; audio.muted = true;
+      settings.staticPath = 'bundled'; settings.tuningTransition = true; applySettings();
+      const originalRandom = Math.random;
+      Math.random = () => 0.5;
+      const started = performance.now();
+      try { await startStatic(); } finally { Math.random = originalRandom; }
+      const elapsed = performance.now() - started;
+      const offset = staticAudio.currentTime;
+      const expectedStart = Math.max(0, staticAudio.duration - 1) * 0.5;
+      const burst = elapsed >= 900 && !staticAudio.paused && staticAudio.loop && offset >= expectedStart && offset <= expectedStart + 1.4;
+      const stored = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+      sanitizeConfig(stored); applySettings();
+      const persisted = settings.tuningTransition && $('#tuningTransition').checked;
+      const pending = startStatic();
+      await new Promise(resolve => setTimeout(resolve, 40));
+      $('#tuningTransition').click();
+      await pending;
+      const cancelled = staticAudio.paused && !settings.tuningTransition;
+      const normalStarted = performance.now();
+      await startStatic();
+      const normal = performance.now() - normalStarted < 800 && !staticAudio.paused;
+      stopStatic();
+      settings.staticPath = 'off'; settings.tuningTransition = true;
+      const disabledStarted = performance.now(); await startStatic();
+      const disabled = staticAudio.paused && performance.now() - disabledStarted < 300;
+      settings.staticPath = 'bundled';
+      const stale = startStatic(), latest = startStatic();
+      await new Promise(resolve => setTimeout(resolve, 40)); stopStatic();
+      await Promise.all([stale, latest]);
+      const rapidCancel = staticAudio.paused;
+      const tunedAt = performance.now();
+      await tune({key: 'static-timing', station: 'Timing', mode: 'longset', tracks: [{path: ${JSON.stringify(audioPath)}, name: 'Timing'}]});
+      const delayedStation = performance.now() - tunedAt >= 900 && !audio.paused;
+      audio.pause(); selected = null;
+      settings.staticPath = 'bundled'; settings.tuningTransition = false; applySettings();
+      updateVolume();
+      return {burst, persisted, cancelled, normal, disabled, rapidCancel, delayedStation, elapsed, offset};
+    })()`);
+    if (
+      !staticState.burst ||
+      !staticState.persisted ||
+      !staticState.cancelled ||
+      !staticState.normal ||
+      !staticState.disabled ||
+      !staticState.rapidCancel ||
+      !staticState.delayedStation
+    )
+      throw new Error('Static transition failed: ' + JSON.stringify(staticState));
+    const tuningRangeState = await window.webContents.executeJavaScript(`(async () => {
+      settings.tuningTransition = true; settings.staticPath = 'bundled'; staticAudio.muted = true; audio.muted = true;
+      $('#tuningMinMs').value = 300; $('#tuningMinMs').dispatchEvent(new Event('change'));
+      $('#tuningMaxMs').value = 700; $('#tuningMaxMs').dispatchEvent(new Event('change'));
+      const originalRandom = Math.random; Math.random = () => 0.5;
+      const start = performance.now();
+      try { await startStatic(); } finally {Math.random = originalRandom;}
+      const elapsed = performance.now() - start;
+      const ranged = elapsed >= 450 && elapsed < 1200 && !staticAudio.paused;
+      stopStatic();
+      $('#tuningMinMs').value = 100; $('#tuningMinMs').dispatchEvent(new Event('change'));
+      $('#tuningMaxMs').value = 100; $('#tuningMaxMs').dispatchEvent(new Event('change'));
+      const originalClockFor = clockFor;
+      clockFor = async (...args) => {await new Promise(resolve => setTimeout(resolve, 900)); return originalClockFor(...args);};
+      let loadingLoops, finishes;
+      try {
+        const pending = tune({key: 'slow-static', station: 'Slow', mode: 'longset', tracks: [{path: ${JSON.stringify(audioPath)}, name: 'Slow'}]});
+        await new Promise(resolve => setTimeout(resolve, 400));
+        loadingLoops = !staticAudio.paused && staticAudio.loop && audio.paused;
+        await pending; finishes = staticAudio.paused && !audio.paused;
+      } finally {clockFor = originalClockFor; audio.pause(); stopStatic(); selected = null;}
+      $('#tuningMaxMs').value = 9999; $('#tuningMaxMs').dispatchEvent(new Event('change'));
+      $('#tuningMinMs').value = 1600; $('#tuningMinMs').dispatchEvent(new Event('change'));
+      const clamped = settings.tuningMinMs === 1500 && settings.tuningMaxMs === 1500;
+      $('#tuningMaxMs').value = 0; $('#tuningMaxMs').dispatchEvent(new Event('change'));
+      const zero = settings.tuningMinMs === 0 && settings.tuningMaxMs === 0;
+      const config = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+      sanitizeConfig(config); applySettings();
+      const persisted = settings.tuningMinMs === 0 && settings.tuningMaxMs === 0;
+      settings.tuningMinMs = settings.tuningMaxMs = 1000; settings.tuningTransition = false; applySettings(); updateVolume();
+      return {ranged, loadingLoops, finishes, clamped, zero, persisted};
+    })()`);
+    if (Object.values(tuningRangeState).some((value) => !value))
+      throw new Error('Tuning range/loading failed: ' + JSON.stringify(tuningRangeState));
+    const settingsState = await window.webContents.executeJavaScript(`(async () => {
+      const previousFade = settings.crossfade;
+      $('#globalFade').value = 1250; $('#globalFade').dispatchEvent(new Event('change'));
+      const global = settings.crossfade === 1.25 && Number($('#globalFade').value) === 1250;
+      stationEditor({key:'fade-ms', station: 'Fade', mode: 'tracks', crossfade: 2.5, tracks:[{path:'C:/Music/first.mp3', name:'First'}]});
+      const restored = Number($('#stationFade').value) === 2500;
+      $('#stationFade').value = 1500; $('#editorSave').click();
+      const saved = custom.find(s => s.key === 'fade-ms').crossfade === 1.5;
+      const before = audio.paused;
+      $('#clearDurationCache').click();
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const cleared = $('#cacheStatus').textContent.includes('cache cleared') && !$('#clearDurationCache').disabled && clocks.size === 0 && audio.paused === before;
+      const missing = (await window.radio.lookupDuration(${JSON.stringify(durationFixture)})).duration === 0;
+      settings.crossfade = previousFade; applySettings();
+      return {global, restored, saved, cleared, missing};
+    })()`);
+    if (Object.values(settingsState).some((value) => !value))
+      throw new Error('Settings controls failed: ' + JSON.stringify(settingsState));
     const bannerState = await window.webContents.executeJavaScript(`(async () => {
       const station = {key: 'row-layout', station: 'Row layout', mode: 'longset', accent: '#a83657', tracks: [{path: 'C:/Music/first.mp3', name: 'First'}]};
       logos[station.key] = ${JSON.stringify(path.join(__dirname, '..', 'assets', 'icons', 'radio.png'))};
@@ -555,6 +899,7 @@ app.whenReady().then(async () => {
     app.exit(1);
     return;
   } finally {
+    probeCache?.close();
     window.destroy();
     app.quit();
   }

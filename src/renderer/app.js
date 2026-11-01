@@ -20,7 +20,11 @@ let hidden = [];
 let settings = {
   accent: '#c7f464',
   staticPath: 'bundled',
+  tuningTransition: false,
+  tuningMinMs: 1000,
+  tuningMaxMs: 1000,
   crossfade: 0,
+  randomNext: false,
   bounceSpeed: 40,
   matchBannerAccent: false,
   listDensity: 'comfortable',
@@ -45,10 +49,13 @@ let fading = false;
 let fadeTimer = null;
 let stepTimer = null;
 let stepTarget = null;
+let stepHistoryIndex = null;
+let lastTunedStationKey = null;
+let pendingStationVisit = null;
+let stationHistory = { group: 'all', keys: [], cursor: -1, version: 0 };
 let lastWheelStep = 0;
 
 const clocks = new Map();
-const durations = new Map();
 const unavailable = new Set();
 
 function updateUnavailableNotice() {
@@ -107,10 +114,18 @@ function sanitizeConfig(config) {
     config.settings && typeof config.settings === 'object' && !Array.isArray(config.settings)
       ? config.settings
       : {};
+  const tuningMs = (value) =>
+    Math.max(0, Math.min(1500, Math.round(Number.isFinite(value) ? value : 1000)));
+  const minimum = tuningMs(loaded.tuningMinMs),
+    maximum = tuningMs(loaded.tuningMaxMs);
   settings = {
     accent: typeof loaded.accent === 'string' ? loaded.accent : settings.accent,
     staticPath: typeof loaded.staticPath === 'string' ? loaded.staticPath : settings.staticPath,
+    tuningTransition: loaded.tuningTransition === true,
+    tuningMinMs: Math.min(minimum, maximum),
+    tuningMaxMs: Math.max(minimum, maximum),
     crossfade: Number.isFinite(loaded.crossfade) ? loaded.crossfade : settings.crossfade,
+    randomNext: loaded.randomNext === true,
     bounceSpeed: Number.isFinite(loaded.bounceSpeed) ? loaded.bounceSpeed : settings.bounceSpeed,
     matchBannerAccent: loaded.matchBannerAccent === true,
     listDensity: loaded.listDensity === 'compact' ? 'compact' : 'comfortable',
@@ -212,13 +227,18 @@ function applySettings() {
   applyAccent(selected);
   $('#accentColor').value = settings.accent || '#c7f464';
   $('#matchBannerAccent').checked = settings.matchBannerAccent;
-  $('#globalFade').value = settings.crossfade ?? 0;
+  $('#globalFade').value = Math.round((settings.crossfade ?? 0) * 1000);
   $('#bounceSpeed').value = settings.bounceSpeed ?? 40;
   $('#listDensity').value = settings.listDensity;
+  $('#tuningTransition').checked = settings.tuningTransition;
+  for (const key of ['tuningMinMs', 'tuningMaxMs']) {
+    $('#' + key).value = settings[key];
+    $('#' + key).disabled = !settings.tuningTransition;
+  }
   $('#bannerLayout').value = settings.bannerLayout;
   $('.dial').classList.toggle('banner-row', settings.bannerLayout === 'row');
   $('#stationPreview')?.classList.toggle('banner-row', settings.bannerLayout === 'row');
-  for (const key of ['showScanlines', 'reduceMotion', 'showProgress'])
+  for (const key of ['showScanlines', 'reduceMotion', 'showProgress', 'randomNext'])
     $('#' + key).checked = settings[key];
   document.documentElement.dataset.density = settings.listDensity;
   document.documentElement.classList.toggle('reduce-motion', settings.reduceMotion);
@@ -264,7 +284,10 @@ function updateLogoMotion() {
   $('#logo').classList.toggle('is-playing', !!selected && !audio.paused);
 }
 
+let staticAbort = null;
 function stopStatic() {
+  staticAbort?.abort();
+  staticAbort = null;
   staticAudio.pause();
   try {
     staticAudio.currentTime = 0;
@@ -273,7 +296,33 @@ function stopStatic() {
   }
 }
 
-function startStatic() {
+function waitForStatic(event, ready, signal) {
+  if (signal.aborted) return Promise.resolve(false);
+  if (ready()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (success) => {
+      clearTimeout(timer);
+      staticAudio.removeEventListener(event, loaded);
+      staticAudio.removeEventListener('error', failed);
+      signal.removeEventListener('abort', failed);
+      resolve(success);
+    };
+    const loaded = () => finish(true),
+      failed = () => finish(false);
+    const timer = setTimeout(failed, 1500);
+    staticAudio.addEventListener(event, loaded, { once: true });
+    staticAudio.addEventListener('error', failed, { once: true });
+    signal.addEventListener('abort', failed, { once: true });
+  });
+}
+
+async function startStatic() {
+  stopStatic();
+  const transition = settings.tuningTransition;
+  const delayMs = transition
+    ? settings.tuningMinMs +
+      Math.floor(Math.random() * (settings.tuningMaxMs - settings.tuningMinMs + 1))
+    : 0;
   const path =
     settings.staticPath === 'bundled'
       ? bundledStaticPath
@@ -281,12 +330,46 @@ function startStatic() {
         ? ''
         : settings.staticPath;
   if (path) {
+    const controller = new AbortController();
+    staticAbort = controller;
+    const { signal } = controller;
     try {
       const source = url(path);
-      if (staticAudio.src !== source) staticAudio.src = source;
-      staticAudio.currentTime = 0;
+      // A cold preload="none" element won't fetch metadata until play()/load().
+      // Random seeking needs that metadata before play, so explicitly start loading first.
+      staticAudio.preload = 'metadata';
+      if (staticAudio.src !== source || staticAudio.error) {
+        staticAudio.src = source;
+        staticAudio.load();
+      } else if (staticAudio.readyState === 0 && staticAudio.networkState !== 2) {
+        staticAudio.load();
+      }
+      staticAudio.loop = true;
+      if (transition) {
+        if (!(await waitForStatic('loadedmetadata', () => staticAudio.readyState >= 1, signal)))
+          return;
+        const duration = staticAudio.duration;
+        staticAudio.currentTime = Number.isFinite(duration)
+          ? Math.random() * Math.max(0, duration - delayMs / 1000)
+          : 0;
+        if (!(await waitForStatic('seeked', () => !staticAudio.seeking, signal))) return;
+      } else staticAudio.currentTime = 0;
+      if (signal.aborted) return;
       staticAudio.volume = Math.min(0.5, Number($('#volume').value) / 200);
-      staticAudio.play().catch(() => {});
+      await staticAudio.play();
+      if (signal.aborted) return;
+      if (transition) {
+        await new Promise((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, delayMs);
+          signal.addEventListener('abort', finish, { once: true });
+        });
+        // Keep looping until tune() finishes preparing the station, even after this minimum.
+      }
     } catch {
       /* Static is optional; audio playback can continue. */
     }
@@ -509,10 +592,23 @@ async function showTrackDetails(track, station, currentToken) {
   metadata();
 }
 
-function probe(path) {
+async function probe(path) {
   // Metadata-only audio elements provide durations without buffering every track in RAM.
-  if (durations.has(path)) return Promise.resolve(durations.get(path));
-  return new Promise((resolve) => {
+  let cached;
+  try {
+    cached = await window.radio.lookupDuration(path);
+  } catch {
+    /* Probe normally if the optional cache fails. */
+  }
+  if (cached?.available === false) {
+    unavailable.add(path);
+    return 0;
+  }
+  if (cached?.duration > 0) {
+    unavailable.delete(path);
+    return cached.duration;
+  }
+  const duration = await new Promise((resolve) => {
     const a = new Audio();
     let done = false;
     const timeout = setTimeout(() => finish(0), 10000);
@@ -522,7 +618,6 @@ function probe(path) {
       clearTimeout(timeout);
       a.removeAttribute('src');
       a.load();
-      if (n > 0) durations.set(path, n);
       resolve(n);
     };
     a.onloadedmetadata = () => finish(Number.isFinite(a.duration) ? a.duration : 0);
@@ -530,6 +625,10 @@ function probe(path) {
     a.preload = 'metadata';
     a.src = url(path);
   });
+  if (duration > 0 && cached)
+    await window.radio.rememberDuration(path, cached, duration).catch(() => {});
+  if (duration > 0) unavailable.delete(path);
+  return duration;
 }
 
 async function probeLengths(order, current) {
@@ -544,24 +643,34 @@ async function probeLengths(order, current) {
     }),
   );
   if (current !== token) throw new Error('Tuning changed');
+  updateUnavailableNotice();
   return lengths;
 }
 
 async function clockFor(s, current) {
-  // A clock is created once per station/group in this session. No background audio runs.
+  // Revalidate durations on tune; retain the existing timeline when nothing changed.
   // `steps` are virtual play durations: each ends when the next track's overlap starts.
   const clockKey = `${groupId}:${s.key}`;
-  if (clocks.has(clockKey)) return clocks.get(clockKey);
+  const existing = clocks.get(clockKey);
   const included = new Set(groups.find((g) => g.id === groupId)?.members || []);
   const selectedTracks =
     groupId !== 'all' && !included.has(s.key)
       ? s.tracks.filter((t) => included.has(s.key + '|' + t.path))
       : s.tracks;
-  const order = s.mode === 'longset' ? [...selectedTracks] : shuffle(selectedTracks);
+  const order =
+    existing?.order || (s.mode === 'longset' ? [...selectedTracks] : shuffle(selectedTracks));
   const lengths = await probeLengths(order, current);
+  if (existing && lengths.every((length, index) => length === existing.lengths[index])) {
+    clocks.delete(clockKey);
+    clocks.set(clockKey, existing);
+    return existing;
+  }
   const fade =
     order.length > 1 && lengths.every((n) => n > 0)
-      ? Math.min(fadeFor(s), ...lengths.map((n) => n / 2))
+      ? Math.min(
+          fadeFor(s),
+          lengths.reduce((shortest, n) => Math.min(shortest, n / 2), Infinity),
+        )
       : 0;
   const steps = lengths.map((n) => n - fade);
   // Each track's virtual timeslot ends when its overlap with the next track begins.
@@ -576,7 +685,16 @@ async function clockFor(s, current) {
     offset: Math.random() * total,
     usesGlobalFade: s.crossfade == null,
   };
-  clocks.set(clockKey, clock);
+  clocks.delete(clockKey);
+  // Bound retained session timelines; the currently playing station always remains available.
+  if (order.length <= 20000) clocks.set(clockKey, clock);
+  let retained = [...clocks.values()].reduce((sum, entry) => sum + entry.order.length, 0);
+  for (const [key, entry] of clocks) {
+    if (clocks.size <= 32 && retained <= 20000) break;
+    if (entry === clock) continue;
+    clocks.delete(key);
+    retained -= entry.order.length;
+  }
   return clock;
 }
 
@@ -658,6 +776,7 @@ async function advance() {
       audio.currentTime = 0;
       await audio.play();
       if (current !== token) return;
+      commitStationVisit(station);
       clock.origin = performance.now();
       clock.offset = clock.steps.slice(0, nextIndex).reduce((sum, step) => sum + step, 0);
       showTrackDetails(track, station, current).catch(() => {});
@@ -671,7 +790,57 @@ async function advance() {
   if (current === token) notice('No playable tracks in this station');
 }
 
-async function tune(s) {
+function resetStationHistory(seed = false) {
+  const key =
+    seed && visible().some((station) => station.key === lastTunedStationKey)
+      ? lastTunedStationKey
+      : null;
+  stationHistory = {
+    group: groupId,
+    keys: key ? [key] : [],
+    cursor: key ? 0 : -1,
+    version: stationHistory.version + 1,
+  };
+  stepHistoryIndex = null;
+}
+
+function commitStationVisit(station) {
+  const visit = pendingStationVisit;
+  if (!visit || visit.key !== station.key || visit.group !== groupId) return;
+  pendingStationVisit = null;
+  lastTunedStationKey = station.key;
+  if (!settings.randomNext) return;
+  if (stationHistory.group !== groupId) resetStationHistory();
+  let historyIndex = -1;
+  if (visit.navigation?.version === stationHistory.version) historyIndex = visit.navigation.index;
+  else if (visit.navigation) {
+    // A pending tune can finish during the button debounce and shift the bounded history.
+    const direction = visit.navigation.direction;
+    for (
+      let i = stationHistory.cursor + direction;
+      i >= 0 && i < stationHistory.keys.length;
+      i += direction
+    ) {
+      if (stationHistory.keys[i] === station.key) {
+        historyIndex = i;
+        break;
+      }
+    }
+  }
+  if (historyIndex >= 0 && stationHistory.keys[historyIndex] === station.key) {
+    stationHistory.cursor = historyIndex;
+  } else if (stationHistory.keys[stationHistory.cursor] !== station.key) {
+    stationHistory.keys = stationHistory.keys.slice(0, stationHistory.cursor + 1);
+    stationHistory.keys.push(station.key);
+    stationHistory.cursor = stationHistory.keys.length - 1;
+  }
+  const start = Math.max(0, stationHistory.cursor - 2);
+  stationHistory.keys = stationHistory.keys.slice(start, stationHistory.cursor + 3);
+  stationHistory.cursor -= start;
+  stationHistory.version++;
+}
+
+async function tune(s, navigation = null) {
   // The token invalidates pending metadata/sidecar work when tuning changes quickly.
   if (!s) return;
   $('#settingsView').hidden = true;
@@ -681,13 +850,16 @@ async function tune(s) {
   clearTimeout(stepTimer);
   stepTimer = null;
   stepTarget = null;
+  stepHistoryIndex = null;
+  pendingStationVisit = { key: s.key, group: groupId, navigation };
   stopFade();
   audio.pause();
   currentClock = null;
   sidecar = null;
   displayedTrackPath = '';
   selected = s;
-  startStatic();
+  const useTransition = settings.tuningTransition;
+  const tuningSound = startStatic();
   $('#frequency').textContent = String(
     visible().findIndex((item) => item.key === s.key) + 1,
   ).padStart(2, '0');
@@ -705,6 +877,7 @@ async function tune(s) {
   updateActiveStation();
   try {
     const clock = await clockFor(s, current);
+    if (useTransition) await tuningSound;
     if (current !== token) return;
     currentClock = clock;
     const p = position(clock),
@@ -726,6 +899,7 @@ async function tune(s) {
       : Math.max(0, p.seconds);
     showTrackDetails(track, s, current).catch(() => {});
     await audio.play();
+    if (current === token) commitStationVisit(s);
   } catch (error) {
     if (current === token) {
       const path = currentClock?.order[currentIndex]?.path;
@@ -744,11 +918,47 @@ function step(n) {
   const list = visible();
   if (!list.length) return;
   const index = list.findIndex((s) => s.key === (stepTarget?.key || selected?.key));
-  stepTarget = list[(Math.max(0, index) + n + list.length) % list.length];
+  let historyIndex = null,
+    target = null;
+  if (settings.randomNext) {
+    if (stationHistory.group !== groupId) resetStationHistory();
+    let cursor = stepHistoryIndex ?? stationHistory.cursor;
+    // Undo a queued/new tune back to the last successful station before going further back.
+    if (
+      n < 0 &&
+      stepHistoryIndex == null &&
+      (stepTarget || pendingStationVisit) &&
+      (stepTarget?.key || pendingStationVisit?.key) !== stationHistory.keys[cursor]
+    )
+      cursor++;
+    for (let i = cursor + n; i >= 0 && i < stationHistory.keys.length; i += n) {
+      const candidate = list.find((station) => station.key === stationHistory.keys[i]);
+      if (candidate && candidate.tracks.some((track) => !unavailable.has(track.path))) {
+        target = candidate;
+        historyIndex = i;
+        break;
+      }
+    }
+    if (!target && n < 0) return;
+    if (!target) {
+      const candidates = list.filter(
+        (station) => station.key !== (stepTarget?.key || selected?.key),
+      );
+      target = candidates.length
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : list[0];
+    }
+  } else target = list[(Math.max(0, index) + n + list.length) % list.length];
+  stepTarget = target;
+  stepHistoryIndex = historyIndex;
+  const navigation =
+    historyIndex == null
+      ? null
+      : { index: historyIndex, version: stationHistory.version, direction: Math.sign(n) };
   $('#frequency').textContent = String(list.indexOf(stepTarget) + 1).padStart(2, '0');
   $('#stationName').textContent = stepTarget.station;
   clearTimeout(stepTimer);
-  stepTimer = setTimeout(() => tune(stepTarget), 180);
+  stepTimer = setTimeout(() => tune(target, navigation), 180);
 }
 
 async function scan(path) {
@@ -864,9 +1074,9 @@ function stationFormMarkup(station, logoPath, bannerPath) {
     <p id="textModeHelp"></p>
     <p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p>
     <div id="crossfadeField" hidden class="editor-section">
-      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(settings.crossfade)} seconds)</label>
-      <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30" step="0.5"
-        value="${station?.crossfade == null ? '0' : Math.min(30, station.crossfade)}"> seconds</label>
+      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(Math.round(settings.crossfade * 1000))} ms)</label>
+      <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30000" step="1"
+        value="${station?.crossfade == null ? '0' : Math.round(Math.min(30, station.crossfade) * 1000)}"> ms</label>
     </div>
     </details>
     ${station ? '<button type="button" id="deleteStation" class="danger">Delete station</button>' : ''}
@@ -1029,9 +1239,10 @@ function stationEditor(station = null, paths = []) {
         (!override ||
           !Number.isFinite(Number(override)) ||
           Number(override) < 0 ||
-          Number(override) > 30)
+          Number(override) > 30000 ||
+          !Number.isInteger(Number(override)))
       ) {
-        $('#editorError').textContent = 'Crossfade must be between 0 and 30 seconds.';
+        $('#editorError').textContent = 'Crossfade must be between 0 and 30000 milliseconds.';
         return false;
       }
       if (station) {
@@ -1062,7 +1273,7 @@ function stationEditor(station = null, paths = []) {
           mode,
           textMode: $('#textMode').value,
           // Store seconds internally so existing stations.json values remain compatible.
-          crossfade: override === '' ? null : Number(override),
+          crossfade: override === '' ? null : Number(override) / 1000,
           spinLogo: !separate() && $('#spinLogo').checked,
           bannerPath: separate() ? '' : bannerPath,
           bannerColor: !separate() && $('#useBannerColor').checked ? $('#bannerColor').value : '',
@@ -1490,11 +1701,15 @@ for (const key of [
   'showScanlines',
   'reduceMotion',
   'showProgress',
+  'tuningTransition',
+  'randomNext',
 ]) {
   $('#' + key).onchange = (event) => {
     settings[key] = ['listDensity', 'bannerLayout'].includes(key)
       ? event.target.value
       : event.target.checked;
+    if (key === 'tuningTransition') stopStatic();
+    if (key === 'randomNext') resetStationHistory(settings.randomNext);
     applySettings();
     save();
   };
@@ -1521,10 +1736,34 @@ $('#matchBannerAccent').onchange = (event) => {
   save();
 };
 $('#globalFade').onchange = (e) => {
-  settings.crossfade = Math.max(0, Math.min(30, Number(e.target.value) || 0));
+  settings.crossfade = Math.max(0, Math.min(30000, Math.round(Number(e.target.value) || 0))) / 1000;
   for (const [key, clock] of clocks) if (clock.usesGlobalFade) clocks.delete(key);
   applySettings();
   save();
+};
+for (const key of ['tuningMinMs', 'tuningMaxMs']) {
+  $('#' + key).onchange = (event) => {
+    settings[key] = Math.max(0, Math.min(1500, Math.round(Number(event.target.value) || 0)));
+    if (key === 'tuningMinMs')
+      settings.tuningMaxMs = Math.max(settings.tuningMinMs, settings.tuningMaxMs);
+    else settings.tuningMinMs = Math.min(settings.tuningMinMs, settings.tuningMaxMs);
+    applySettings();
+    save();
+  };
+}
+$('#clearDurationCache').onclick = async () => {
+  const button = $('#clearDurationCache');
+  button.disabled = true;
+  $('#cacheStatus').textContent = 'Clearing duration cache…';
+  try {
+    await window.radio.clearDurationCache();
+    clocks.clear();
+    $('#cacheStatus').textContent = 'Duration cache cleared. Durations will be rebuilt as needed.';
+  } catch (error) {
+    $('#cacheStatus').textContent = `Could not clear duration cache: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
 };
 $('#bounceSpeed').onchange = (e) => {
   settings.bounceSpeed = Math.max(10, Math.min(200, Number(e.target.value) || 40));
@@ -1534,12 +1773,14 @@ $('#bounceSpeed').onchange = (e) => {
 $('#chooseStatic').onclick = async () => {
   const files = await window.radio.chooseFiles();
   if (files[0]) {
+    stopStatic();
     settings.staticPath = files[0];
     applySettings();
     save();
   }
 };
 $('#useBundledStatic').onclick = () => {
+  stopStatic();
   settings.staticPath = 'bundled';
   applySettings();
   save();
@@ -1551,7 +1792,11 @@ $('#clearStatic').onclick = () => {
   save();
 };
 $('#groupSelect').onchange = (e) => {
+  clearTimeout(stepTimer);
+  stepTimer = null;
+  stepTarget = null;
   groupId = e.target.value;
+  resetStationHistory();
   render();
   if (selected && visible().some((s) => s.key === selected.key)) tune(selected);
   else if (visible().length) tune(visible()[0]);

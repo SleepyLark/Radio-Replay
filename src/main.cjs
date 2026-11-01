@@ -2,6 +2,15 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } = 
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { createHash } = require('node:crypto');
+const { DurationCache } = require('./duration-cache.cjs');
+let durationCache;
+let scannedAudio = [];
+let durationReferences = '';
+const cache = () =>
+  (durationCache ||= new DurationCache(
+    path.join(app.getPath('userData'), 'duration-cache.sqlite'),
+  ));
 
 let window;
 let tray;
@@ -226,6 +235,7 @@ handle('library:scan', async (_, root) => {
   if (!libraryRoot || path.normalize(root) !== path.normalize(libraryRoot))
     throw new Error('Library path was not loaded from settings');
   const files = await walk(root);
+  scannedAudio = files;
   grantAudio(files);
   const grouped = new Map();
   for (const file of files) {
@@ -341,11 +351,38 @@ handle('config:save', (_, config) => {
         }
       }
       configLoaded = true;
+      if (durationCache) {
+        const referenced = function* () {
+          yield* scannedAudio;
+          for (const station of config.custom) for (const track of station.tracks) yield track.path;
+        };
+        const hash = createHash('sha256');
+        for (const file of referenced()) hash.update(file).update('\0');
+        const signature = hash.digest('hex');
+        if (signature !== durationReferences) {
+          durationReferences = signature;
+          await durationCache.retain(referenced());
+        }
+      }
       return configPath();
     });
   return configWrites;
 });
 handle('config:show', () => shell.showItemInFolder(configPath()));
+handle('duration:lookup', (_, audioPath) => {
+  requireGrantedAudio(audioPath);
+  return cache().lookup(audioPath);
+});
+handle('duration:remember', (_, audioPath, signature, duration) => {
+  requireGrantedAudio(audioPath);
+  return cache().remember(audioPath, signature, duration);
+});
+handle('duration:clear', () => {
+  cache().clear();
+  durationReferences = '';
+  return true;
+});
+app.on('will-quit', () => durationCache?.close());
 handle('sidecar:read', async (_, audioPath) => {
   requireGrantedAudio(audioPath);
   const ext = path.extname(audioPath);
@@ -362,6 +399,12 @@ handle('sidecar:read', async (_, audioPath) => {
 const tagCache = new Map();
 handle('tags:read', (_, audioPath) => {
   requireGrantedAudio(audioPath);
+  if (tagCache.has(audioPath)) {
+    const entry = tagCache.get(audioPath);
+    tagCache.delete(audioPath);
+    tagCache.set(audioPath, entry);
+    return entry;
+  }
   if (!tagCache.has(audioPath)) {
     tagCache.set(
       audioPath,
@@ -374,6 +417,7 @@ handle('tags:read', (_, audioPath) => {
         }))
         .catch(() => ({ artist: '', title: '', album: '' })),
     );
+    if (tagCache.size > 512) tagCache.delete(tagCache.keys().next().value);
   }
   return tagCache.get(audioPath);
 });

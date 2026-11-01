@@ -122,15 +122,41 @@
           </section>
           <section data-settings-panel="playback" hidden>
             <h2>Playback</h2>
+            <label class="checkbox-setting">
+              <input id="randomNext" type="checkbox" />
+              Choose a random station when pressing Next
+            </label>
+            <p>
+              Chooses another station from the current group. Previous retraces up to two stations;
+              Next retraces forward history before choosing another random station.
+            </p>
             <label>
               Default crossfade for shuffled tracks
-              <input id="globalFade" type="number" min="0" max="30" step="0.5" value="0" />
-              seconds
+              <input id="globalFade" type="number" min="0" max="30000" step="1" value="0" />
+              ms
             </label>
             <p>
               Station crossfade choices are set in Edit station. A value of 0 disables crossfade.
             </p>
             <h2>Tuning sound</h2>
+            <label class="checkbox-setting">
+              <input id="tuningTransition" type="checkbox" />
+              Play a random static transition when tuning
+            </label>
+            <p>
+              Starts at a random point and chooses a duration within this range. Static keeps
+              looping if the station needs longer to load. Turn off for loading-only static.
+            </p>
+            <label>
+              Minimum transition
+              <input id="tuningMinMs" type="number" min="0" max="1500" step="1" value="1000" />
+              ms
+            </label>
+            <label>
+              Maximum transition
+              <input id="tuningMaxMs" type="number" min="0" max="1500" step="1" value="1000" />
+              ms
+            </label>
             <label>
               Static noise while tuning
               <span id="staticName">Bundled static</span>
@@ -145,7 +171,13 @@
             <h2>Files and data</h2>
             <div class="settings-actions">
               <button id="showConfig">Open stations.json</button>
+              <button id="clearDurationCache" type="button">Clear duration cache</button>
             </div>
+            <p>
+              Clearing cached durations frees their storage. Tracks are measured again as needed;
+              your stations and audio files are kept.
+            </p>
+            <p id="cacheStatus" role="status" aria-live="polite"></p>
           </section>
           <button id="settingsBack" class="settings-back">← Back to stations</button>
         </section>
