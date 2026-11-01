@@ -26,7 +26,7 @@ The output appears in `release/`. Builds are not committed to Git.
 ## Stations and groups
 
 - **Manage Stations** lets you edit any station or select several for bulk removal. Deleting a station never deletes its source audio.
-- **Edit station** has Essentials, Appearance, and Advanced sections, a live artwork preview, and Save/Cancel buttons that stay visible. Customize its name, files, logo, optional 3D logo rotation, display background image or color, accent override, playback style, timestamp meaning, and crossfade choice. Logos and backgrounds accept animated GIFs.
+- **Edit station** has Essentials, Appearance, and Advanced sections, a live artwork preview, and Save/Cancel buttons that stay visible. Customize its name, files, logo, optional 3D logo rotation, display background image or color, accent override, playback style, timestamp meaning, and crossfade choice. In Settings → Appearance, choose a global station banner layout: column (logo above the name) or row (logo to the left). This applies to every station and its editor preview. Logos and backgrounds accept animated GIFs.
 - Groups can contain whole stations or selected tracks from individual-track stations. Use the group selector above the sidebar to show only that group.
 - A station starts at a random point on first tune in a session. Its timeline advances while you listen elsewhere without playing background audio. The timeline resets when the app restarts.
 

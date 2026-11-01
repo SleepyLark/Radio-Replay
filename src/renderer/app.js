@@ -24,6 +24,7 @@ let settings = {
   bounceSpeed: 40,
   matchBannerAccent: false,
   listDensity: 'comfortable',
+  bannerLayout: 'column',
   showScanlines: true,
   reduceMotion: false,
   showProgress: true,
@@ -113,10 +114,19 @@ function sanitizeConfig(config) {
     bounceSpeed: Number.isFinite(loaded.bounceSpeed) ? loaded.bounceSpeed : settings.bounceSpeed,
     matchBannerAccent: loaded.matchBannerAccent === true,
     listDensity: loaded.listDensity === 'compact' ? 'compact' : 'comfortable',
+    // Preserve a previously chosen row layout when upgrading from station-level settings.
+    bannerLayout:
+      loaded.bannerLayout === 'row' ||
+      (loaded.bannerLayout == null &&
+        Array.isArray(config.custom) &&
+        config.custom.some((station) => station.bannerLayout === 'row'))
+        ? 'row'
+        : 'column',
     showScanlines: loaded.showScanlines !== false,
     reduceMotion: loaded.reduceMotion === true,
     showProgress: loaded.showProgress !== false,
   };
+  for (const station of custom) delete station.bannerLayout;
 }
 
 function invalidateStationClock(stationKey) {
@@ -205,6 +215,9 @@ function applySettings() {
   $('#globalFade').value = settings.crossfade ?? 0;
   $('#bounceSpeed').value = settings.bounceSpeed ?? 40;
   $('#listDensity').value = settings.listDensity;
+  $('#bannerLayout').value = settings.bannerLayout;
+  $('.dial').classList.toggle('banner-row', settings.bannerLayout === 'row');
+  $('#stationPreview')?.classList.toggle('banner-row', settings.bannerLayout === 'row');
   for (const key of ['showScanlines', 'reduceMotion', 'showProgress'])
     $('#' + key).checked = settings[key];
   document.documentElement.dataset.density = settings.listDensity;
@@ -236,6 +249,7 @@ function applyAccent(station) {
 
 function applyStationVisuals(station) {
   const dial = $('.dial');
+  dial.classList.toggle('banner-row', settings.bannerLayout === 'row');
   const image = $('#dialBanner');
   const color = /^#[0-9a-f]{6}$/i.test(station.bannerColor) ? station.bannerColor : '';
   dial.style.backgroundColor = color || '#0b1513';
@@ -317,7 +331,7 @@ function sidebarStationMarkup(station) {
   const active = selected?.key === station.key ? 'active' : '';
   const description =
     station.mode === 'longset'
-      ? ''
+      ? 'broadcast'
       : `${station.tracks.length} track${station.tracks.length === 1 ? '' : 's'}`;
 
   return `
@@ -1075,6 +1089,7 @@ function stationEditor(station = null, paths = []) {
   $('#newMode').value = station?.mode || 'tracks';
   $('#textMode').value = station?.textMode || 'auto';
   const updatePreview = () => {
+    $('#stationPreview').classList.toggle('banner-row', settings.bannerLayout === 'row');
     $('#previewName').textContent = $('#newName').value.trim() || 'YOUR STATION';
     $('#previewMode').textContent =
       $('#newMode').value === 'longset' ? 'BROADCAST · IN ORDER · LOOP' : 'MUSIC · SHUFFLE';
@@ -1469,9 +1484,17 @@ for (const button of document.querySelectorAll('[data-settings-tab]')) {
       panel.hidden = panel.dataset.settingsPanel !== button.dataset.settingsTab;
   };
 }
-for (const key of ['listDensity', 'showScanlines', 'reduceMotion', 'showProgress']) {
+for (const key of [
+  'listDensity',
+  'bannerLayout',
+  'showScanlines',
+  'reduceMotion',
+  'showProgress',
+]) {
   $('#' + key).onchange = (event) => {
-    settings[key] = key === 'listDensity' ? event.target.value : event.target.checked;
+    settings[key] = ['listDensity', 'bannerLayout'].includes(key)
+      ? event.target.value
+      : event.target.checked;
     applySettings();
     save();
   };
@@ -1567,7 +1590,7 @@ function updateVolume() {
   $('#volume').setAttribute('aria-valuetext', `${value} percent${muted ? ', muted' : ''}`);
   $('#mute').setAttribute('aria-pressed', String(muted));
   $('#mute').setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
-  $('#mute').textContent = muted || value === 0 ? '◖×' : '◖))';
+  $('#mute').dataset.silent = String(muted || value === 0);
   const count = muted ? 0 : Math.round((value * 12) / 100);
   document
     .querySelectorAll('.volume-segments i')
@@ -1578,7 +1601,13 @@ function changeVolume(delta) {
   muted = false;
   updateVolume();
 }
-$('.volume-segments').innerHTML = '<i></i>'.repeat(12);
+$('.volume-segments').innerHTML = Array.from(
+  { length: 12 },
+  (_, index) => `<i data-level="${index + 1}"></i>`,
+).join('');
+document.querySelectorAll('.volume-segments i').forEach((bar, index) => {
+  bar.style.height = `${6 + (index * 18) / 11}px`;
+});
 $('#volume').oninput = () => {
   muted = false;
   updateVolume();

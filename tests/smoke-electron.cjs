@@ -431,6 +431,48 @@ app.whenReady().then(async () => {
     })()`);
     if (Object.values(playMediaState).some((value) => !value))
       throw new Error('Media play/pause failed: ' + JSON.stringify(playMediaState));
+    const bannerState = await window.webContents.executeJavaScript(`(async () => {
+      const station = {key: 'row-layout', station: 'Row layout', mode: 'longset', accent: '#a83657', tracks: [{path: 'C:/Music/first.mp3', name: 'First'}]};
+      logos[station.key] = ${JSON.stringify(path.join(__dirname, '..', 'assets', 'icons', 'radio.png'))};
+      stationEditor(station);
+      $('#bannerLayout').value = 'row'; $('#bannerLayout').dispatchEvent(new Event('change'));
+      const preview = $('#stationPreview').classList.contains('banner-row');
+      $('#editorSave').click();
+      const saved = custom.find(s => s.key === station.key);
+      await save();
+      const config = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+      sanitizeConfig(config); applySettings();
+      const persisted = settings.bannerLayout === 'row' && !Object.hasOwn(saved, 'bannerLayout');
+      stationEditor(saved);
+      const restored = $('#stationPreview').classList.contains('banner-row') && !$('#editorBody #bannerLayout'); $('#editor').close();
+      $('#logo').src = url(logos[station.key]); $('#logo').hidden = false; await $('#logo').decode();
+      $('#stationName').textContent = station.station;
+      applyStationVisuals(saved);
+      const logo = $('#logo').getBoundingClientRect(), name = $('#stationName').getBoundingClientRect();
+      const row = logo.right <= name.left && getComputedStyle($('.dial')).display === 'grid';
+      applyStationVisuals({...saved, bannerLayout: 'column'});
+      const ignoresStationOverride = $('.dial').classList.contains('banner-row');
+      $('#bannerLayout').value = 'column'; $('#bannerLayout').dispatchEvent(new Event('change'));
+      const column = !$('.dial').classList.contains('banner-row') && getComputedStyle($('.dial')).display === 'flex';
+      const badge = new DOMParser().parseFromString(sidebarStationMarkup(station), 'text/html').querySelector('small').textContent;
+      $('#logo').hidden = true;
+      const currentConfig = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+      sanitizeConfig({...currentConfig, settings: {}, custom: [{...station, bannerLayout: 'row'}]});
+      const migrated = settings.bannerLayout === 'row' && !Object.hasOwn(custom[0], 'bannerLayout');
+      sanitizeConfig(currentConfig); applySettings();
+      return {preview, persisted, restored, row, column, badge, ignoresStationOverride, migrated};
+    })()`);
+    if (
+      !bannerState.preview ||
+      !bannerState.persisted ||
+      !bannerState.restored ||
+      !bannerState.row ||
+      !bannerState.column ||
+      !bannerState.ignoresStationOverride ||
+      !bannerState.migrated ||
+      bannerState.badge !== 'broadcast'
+    )
+      throw new Error('Station banner layout failed: ' + JSON.stringify(bannerState));
     window.setSize(980, 620);
     const layoutState = await window.webContents.executeJavaScript(`(() => {
       stationEditor(null, Array.from({length: 40}, (_, i) => 'C:/Music/recording-' + i + '.mp3'));
