@@ -11,6 +11,7 @@ const keyFor = (file) =>
     .digest('hex');
 const sameFile = (a, b) =>
   a && b && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+const validDuration = (value) => Number.isFinite(value) && value >= 0.5 && value <= 48 * 3600;
 
 // Derived, disposable data. Audio and station definitions never live in this database.
 class DurationCache {
@@ -40,15 +41,21 @@ class DurationCache {
       this.remove = this.db.prepare('DELETE FROM durations_v1 WHERE key=?');
       this.db.prepare('DELETE FROM durations_v1 WHERE used < ?').run(Date.now() - 90 * 86400000);
       return this.db;
-    } catch {
+    } catch (error) {
       // Corrupt/unwritable caches must not prevent playback. Remove only our derived file.
       try {
         this.db?.close();
       } catch {}
       this.db = null;
-      try {
-        fs.unlinkSync(this.file);
-      } catch {}
+      if (
+        ['SQLITE_CORRUPT', 'SQLITE_NOTADB'].includes(error.code) ||
+        (error.code === 'ERR_SQLITE_ERROR' &&
+          /file is not a database|database disk image is malformed/i.test(error.message))
+      ) {
+        try {
+          fs.unlinkSync(this.file);
+        } catch {}
+      }
       this.disabled = true;
       return null;
     }
@@ -81,7 +88,7 @@ class DurationCache {
     try {
       if (this.open()) {
         const entry = this.pending.get(key) || this.get.get(key);
-        if (sameFile(entry, signature) && Number.isFinite(entry.duration) && entry.duration > 0) {
+        if (sameFile(entry, signature) && validDuration(entry.duration)) {
           duration = entry.duration;
           // A daily access stamp is sufficient for stale-entry cleanup; warm tuning is read-only.
           if (Date.now() - entry.used > 86400000) this.queue(key, { ...signature, duration });
@@ -97,8 +104,7 @@ class DurationCache {
     const current = await this.signature(file);
     if (
       signature?.cacheGeneration !== this.generation ||
-      !Number.isFinite(duration) ||
-      duration <= 0 ||
+      !validDuration(duration) ||
       !sameFile(signature, current)
     )
       return false;

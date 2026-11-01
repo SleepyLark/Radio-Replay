@@ -4,18 +4,10 @@ let audio = $('#audio');
 let spare = $('#audioNext');
 const staticAudio = $('#staticAudio');
 
-const get = (k, fallback) => {
-  // Read settings from the pre-JSON version once, then persist them in stations.json.
-  try {
-    return JSON.parse(localStorage.getItem(k)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
-let root = localStorage.getItem('radio-library') || '';
-let custom = get('custom-stations', []);
-let groups = get('station-groups', []);
-let logos = get('station-logos', {});
+let root = '';
+let custom = [];
+let groups = [];
+let logos = {};
 let hidden = [];
 let settings = {
   accent: '#c7f464',
@@ -267,6 +259,39 @@ function applyAccent(station) {
   window.radio.setAppAccent(accent);
 }
 
+async function bannerAccentFor(file) {
+  const image = new Image();
+  image.src = url(file);
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 16;
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0, 16, 16);
+  const pixels = context.getImageData(0, 0, 16, 16).data;
+  let red = 0,
+    green = 0,
+    blue = 0,
+    weight = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const alpha = pixels[i + 3] / 255;
+    if (alpha < 0.25) continue;
+    const r = pixels[i],
+      g = pixels[i + 1],
+      b = pixels[i + 2];
+    const emphasis = alpha * (1 + (Math.max(r, g, b) - Math.min(r, g, b)) / 255);
+    red += r * emphasis;
+    green += g * emphasis;
+    blue += b * emphasis;
+    weight += emphasis;
+  }
+  if (!weight) return '#c7f464';
+  const channel = (value) =>
+    Math.max(45, Math.min(230, Math.round(value / weight)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(red)}${channel(green)}${channel(blue)}`;
+}
+
 function applyStationVisuals(station) {
   const dial = $('.dial');
   dial.classList.toggle('banner-row', settings.bannerLayout === 'row');
@@ -508,6 +533,7 @@ function parse(raw) {
         album: typeof data.album === 'string' ? data.album : '',
         timed: Array.isArray(data.timed)
           ? data.timed
+              .slice(0, 20000)
               .filter((x) => x && Number.isFinite(x.at) && x.at >= 0 && typeof x.text === 'string')
               .sort((a, b) => a.at - b.at)
           : [],
@@ -518,6 +544,7 @@ function parse(raw) {
   }
   const timed = [];
   for (const line of raw.text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    if (timed.length >= 20000) break;
     const prefix = line.trimStart().match(/^(?:\[\d+:[0-5]\d(?:\.\d+)?\])+/)?.[0];
     if (!prefix) continue;
     const lyric = line.trimStart().slice(prefix.length).trim();
@@ -592,13 +619,15 @@ async function showTrackDetails(track, station, currentToken) {
   metadata();
 }
 
-async function probe(path) {
+async function probe(path, lookedUp) {
   // Metadata-only audio elements provide durations without buffering every track in RAM.
-  let cached;
-  try {
-    cached = await window.radio.lookupDuration(path);
-  } catch {
-    /* Probe normally if the optional cache fails. */
+  let cached = lookedUp;
+  if (cached === undefined) {
+    try {
+      cached = await window.radio.lookupDuration(path);
+    } catch {
+      /* Probe normally if the optional cache fails. */
+    }
   }
   if (cached?.available === false) {
     unavailable.add(path);
@@ -607,6 +636,15 @@ async function probe(path) {
   if (cached?.duration > 0) {
     unavailable.delete(path);
     return cached.duration;
+  }
+  try {
+    const measured = await window.radio.measureDuration(path);
+    if (measured > 0) {
+      unavailable.delete(path);
+      return measured;
+    }
+  } catch {
+    /* Browser metadata can still play formats the metadata parser cannot measure. */
   }
   const duration = await new Promise((resolve) => {
     const a = new Audio();
@@ -625,20 +663,24 @@ async function probe(path) {
     a.preload = 'metadata';
     a.src = url(path);
   });
-  if (duration > 0 && cached)
-    await window.radio.rememberDuration(path, cached, duration).catch(() => {});
   if (duration > 0) unavailable.delete(path);
   return duration;
 }
 
 async function probeLengths(order, current) {
   const lengths = new Array(order.length);
+  let cached = [];
+  try {
+    cached = await window.radio.lookupDurations(order.map((track) => track.path));
+  } catch {
+    /* The individual lookup path remains available if batching fails. */
+  }
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(6, order.length) }, async () => {
       while (next < order.length && current === token) {
         const index = next++;
-        lengths[index] = await probe(order[index].path);
+        lengths[index] = await probe(order[index].path, cached[index]);
       }
     }),
   );
@@ -1464,7 +1506,7 @@ function stationEditor(station = null, paths = []) {
       const result = await window.radio.chooseBanner();
       if (result) {
         bannerPath = result.path;
-        bannerAccent = result.accent;
+        bannerAccent = await bannerAccentFor(result.path);
         $('#bannerName').textContent = bannerPath;
         updatePreview();
       }
@@ -1727,9 +1769,12 @@ $('#settingsBack').onclick = () => {
 };
 $('#accentColor').oninput = (e) => {
   settings.accent = e.target.value;
-  applySettings();
+  document.documentElement.style.setProperty('--green', settings.accent);
 };
-$('#accentColor').onchange = () => save();
+$('#accentColor').onchange = () => {
+  applyAccent(selected);
+  save();
+};
 $('#matchBannerAccent').onchange = (event) => {
   settings.matchBannerAccent = event.target.checked;
   applyAccent(selected);

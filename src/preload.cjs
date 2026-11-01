@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('radio', {
   readSidecar: (audioPath) => ipcRenderer.invoke('sidecar:read', audioPath),
   readTags: (audioPath) => ipcRenderer.invoke('tags:read', audioPath),
   lookupDuration: (audioPath) => ipcRenderer.invoke('duration:lookup', audioPath),
+  lookupDurations: (paths) => ipcRenderer.invoke('duration:lookupMany', paths),
+  measureDuration: (audioPath) => ipcRenderer.invoke('duration:measure', audioPath),
   clearDurationCache: () => ipcRenderer.invoke('duration:clear'),
-  rememberDuration: (audioPath, signature, duration) =>
-    ipcRenderer.invoke('duration:remember', audioPath, signature, duration),
 });

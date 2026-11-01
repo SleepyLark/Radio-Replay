@@ -4,6 +4,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { createHash } = require('node:crypto');
 const { DurationCache } = require('./duration-cache.cjs');
+const { MetadataService } = require('./metadata-service.cjs');
+const metadataWorker = new MetadataService();
 let durationCache;
 let scannedAudio = [];
 let durationReferences = '';
@@ -62,6 +64,7 @@ function createTray() {
 }
 const AUDIO = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.wav', '.flac']);
 const SIDEcars = new Set(['.lrc', '.txt', '.json']);
+const MAX_SIDECAR_BYTES = 1024 * 1024;
 const allowedAudio = new Set();
 let libraryRoot = '';
 function grantAudio(paths) {
@@ -74,10 +77,12 @@ function requireGrantedAudio(file) {
 const indexUrl = pathToFileURL(path.join(__dirname, 'renderer', 'index.html')).href;
 function handle(channel, callback) {
   ipcMain.handle(channel, (event, ...args) => {
-    if (event.senderFrame?.url !== indexUrl)
-      throw new Error('Request came from an unexpected page');
+    if (!trustedFrame(event)) throw new Error('Request came from an unexpected page');
     return callback(event, ...args);
   });
+}
+function trustedFrame(event) {
+  return event.sender === window?.webContents && event.senderFrame?.url === indexUrl;
 }
 function audioFile(value) {
   return (
@@ -135,35 +140,6 @@ function createWindow() {
   window.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-function imageAccent(imagePath) {
-  const image = nativeImage.createFromPath(imagePath);
-  if (image.isEmpty()) return '#c7f464';
-  const pixels = image.resize({ width: 16, height: 16 }).toBitmap();
-  let red = 0,
-    green = 0,
-    blue = 0,
-    weight = 0;
-  for (let i = 0; i < pixels.length; i += 4) {
-    const alpha = pixels[i + 3] / 255;
-    if (alpha < 0.25) continue;
-    // Chromium's bitmap is BGRA. Give colorful pixels a little more influence.
-    const r = pixels[i + 2],
-      g = pixels[i + 1],
-      b = pixels[i];
-    const emphasis = alpha * (1 + (Math.max(r, g, b) - Math.min(r, g, b)) / 255);
-    red += r * emphasis;
-    green += g * emphasis;
-    blue += b * emphasis;
-    weight += emphasis;
-  }
-  if (!weight) return '#c7f464';
-  const channel = (value) =>
-    Math.max(45, Math.min(230, Math.round(value / weight)))
-      .toString(16)
-      .padStart(2, '0');
-  return `#${channel(red)}${channel(green)}${channel(blue)}`;
-}
-
 async function walk(folder, isRoot = true) {
   // Folder imports and legacy scans share the same file filter. Never ingest Extras.
   let entries;
@@ -177,8 +153,10 @@ async function walk(folder, isRoot = true) {
   for (const entry of entries) {
     const full = path.join(folder, entry.name);
     if (entry.isDirectory()) {
-      if (!/^extras?$/i.test(entry.name)) files.push(...(await walk(full, false)));
-    } else if (AUDIO.has(path.extname(entry.name).toLowerCase())) files.push(full);
+      if (!/^extras?$/i.test(entry.name))
+        for (const file of await walk(full, false)) files.push(file);
+    } else if (entry.isFile() && AUDIO.has(path.extname(entry.name).toLowerCase()))
+      files.push(full);
   }
   return files;
 }
@@ -219,15 +197,12 @@ handle('banner:choose', async () => {
   });
   if (result.canceled) return null;
   const imagePath = result.filePaths[0];
-  return { path: imagePath, accent: imageAccent(imagePath) };
+  if ((await fs.stat(imagePath)).size > 25 * 1024 * 1024)
+    throw new Error('Banner image exceeds the 25 MB limit');
+  return { path: imagePath };
 });
 ipcMain.on('app:accent', (event, color) => {
-  if (
-    event.sender !== window?.webContents ||
-    typeof color !== 'string' ||
-    !/^#[0-9a-f]{6}$/i.test(color)
-  )
-    return;
+  if (!trustedFrame(event) || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return;
   applyAppIcon(color);
 });
 handle('library:scan', async (_, root) => {
@@ -238,6 +213,7 @@ handle('library:scan', async (_, root) => {
   scannedAudio = files;
   grantAudio(files);
   const grouped = new Map();
+  const collator = new Intl.Collator(undefined, { numeric: true });
   for (const file of files) {
     const info = stationFor(root, file);
     if (!grouped.has(info.key)) grouped.set(info.key, { ...info, tracks: [] });
@@ -248,7 +224,7 @@ handle('library:scan', async (_, root) => {
   return [...grouped.values()]
     .map((s) => ({
       ...s,
-      tracks: s.tracks.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+      tracks: s.tracks.sort((a, b) => collator.compare(a.name, b.name)),
     }))
     .sort((a, b) => a.game.localeCompare(b.game) || a.station.localeCompare(b.station));
 });
@@ -280,7 +256,6 @@ handle('static:bundled', () =>
 );
 let configWrites = Promise.resolve();
 let configLoadFailed = false;
-let configLoaded = false;
 handle('config:load', async () => {
   try {
     const config = JSON.parse(await fs.readFile(configPath(), 'utf8'));
@@ -291,10 +266,11 @@ handle('config:load', async () => {
       for (const station of config.custom)
         if (Array.isArray(station?.tracks)) grantAudio(station.tracks.map((track) => track?.path));
     configLoadFailed = false;
-    configLoaded = true;
     return config;
   } catch (error) {
-    if (error.code === 'ENOENT') return null;
+    if (error.code === 'ENOENT') {
+      return null;
+    }
     configLoadFailed = true;
     throw error;
   }
@@ -317,18 +293,13 @@ handle('config:save', (_, config) => {
         !station ||
         !Array.isArray(station.tracks) ||
         station.tracks.some(
-          (track) =>
-            !audioFile(track?.path) ||
-            (configLoaded && !allowedAudio.has(path.normalize(track.path))),
+          (track) => !audioFile(track?.path) || !allowedAudio.has(path.normalize(track.path)),
         ),
     )
   )
     throw new Error('Station contains an audio file that was not selected');
-  if (configLoaded && config.root !== libraryRoot)
+  if (config.root !== libraryRoot)
     throw new Error('Library path cannot be changed by the renderer');
-  if (!configLoaded)
-    grantAudio(config.custom.flatMap((station) => station.tracks.map((track) => track.path)));
-  if (!libraryRoot && config.root && path.isAbsolute(config.root)) libraryRoot = config.root;
   // Serialize writes because quick UI changes can otherwise race on the same temp file.
   configWrites = configWrites
     .catch(() => {})
@@ -350,7 +321,6 @@ handle('config:save', (_, config) => {
           await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
         }
       }
-      configLoaded = true;
       if (durationCache) {
         const referenced = function* () {
           yield* scannedAudio;
@@ -373,25 +343,59 @@ handle('duration:lookup', (_, audioPath) => {
   requireGrantedAudio(audioPath);
   return cache().lookup(audioPath);
 });
-handle('duration:remember', (_, audioPath, signature, duration) => {
+handle('duration:lookupMany', async (_, paths) => {
+  if (!Array.isArray(paths) || paths.length > 20000) throw new Error('Invalid duration lookup');
+  for (const file of paths) requireGrantedAudio(file);
+  const results = new Array(paths.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(16, paths.length) }, async () => {
+      while (next < paths.length) {
+        const index = next++;
+        results[index] = await cache().lookup(paths[index]);
+      }
+    }),
+  );
+  return results;
+});
+handle('duration:measure', async (_, audioPath) => {
   requireGrantedAudio(audioPath);
-  return cache().remember(audioPath, signature, duration);
+  const signature = await cache().lookup(audioPath);
+  if (!signature.available) return 0;
+  if (signature.duration > 0) return signature.duration;
+  const duration = await metadataWorker.request('duration', audioPath);
+  if (await cache().remember(audioPath, signature, duration)) return duration;
+  return 0;
 });
 handle('duration:clear', () => {
   cache().clear();
   durationReferences = '';
   return true;
 });
-app.on('will-quit', () => durationCache?.close());
+app.on('will-quit', () => {
+  durationCache?.close();
+  metadataWorker.close();
+});
 handle('sidecar:read', async (_, audioPath) => {
   requireGrantedAudio(audioPath);
   const ext = path.extname(audioPath);
   const base = audioPath.slice(0, audioPath.length - ext.length);
   for (const ext of SIDEcars) {
     try {
-      return { extension: ext, text: await fs.readFile(base + ext, 'utf8') };
-    } catch {
-      /* try next */
+      const file = base + ext;
+      const info = await fs.stat(file);
+      if (!info.isFile() || info.size > MAX_SIDECAR_BYTES) return null;
+      const handle = await fs.open(file, 'r');
+      try {
+        const buffer = Buffer.alloc(MAX_SIDECAR_BYTES + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        if (bytesRead > MAX_SIDECAR_BYTES) return null;
+        return { extension: ext, text: buffer.toString('utf8', 0, bytesRead) };
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') return null;
     }
   }
   return null;
@@ -408,14 +412,7 @@ handle('tags:read', (_, audioPath) => {
   if (!tagCache.has(audioPath)) {
     tagCache.set(
       audioPath,
-      import('music-metadata')
-        .then(({ parseFile }) => parseFile(audioPath, { skipCovers: true, duration: false }))
-        .then(({ common }) => ({
-          artist: common.artist || '',
-          title: common.title || '',
-          album: common.album || '',
-        }))
-        .catch(() => ({ artist: '', title: '', album: '' })),
+      metadataWorker.request('tags', audioPath).catch(() => ({ artist: '', title: '', album: '' })),
     );
     if (tagCache.size > 512) tagCache.delete(tagCache.keys().next().value);
   }
@@ -433,6 +430,9 @@ else
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
+  const { defaultSession } = require('electron').session;
+  defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  defaultSession.setPermissionCheckHandler(() => false);
   app.setAppUserModelId('com.local.radioreplay');
   createWindow();
   createTray();

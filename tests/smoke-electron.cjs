@@ -42,12 +42,25 @@ ipcMain.handle('files:registerDrop', (event, paths) => {
   if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
   droppedPaths = paths;
 });
-ipcMain.handle('duration:lookup', (event, file) => {
+const lookupDuration = (event, file) => {
   if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
   if (file === durationFixture) return probeCache.lookup(file);
   if (file.includes('clock-changing'))
     return { available: true, duration: ++clockLookups === 1 ? 120 : 180 };
   return { available: true, duration: file.includes('second') ? 180 : 120 };
+};
+ipcMain.handle('duration:lookup', lookupDuration);
+ipcMain.handle('duration:lookupMany', (event, files) =>
+  Promise.all(files.map((file) => lookupDuration(event, file))),
+);
+ipcMain.handle('duration:measure', async (event, file) => {
+  if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
+  if (file === durationFixture) {
+    const signature = await probeCache.lookup(file);
+    await probeCache.remember(file, signature, 12.34);
+    return 12.34;
+  }
+  return 0;
 });
 ipcMain.handle('duration:remember', (event, file, signature, duration) => {
   if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
@@ -117,9 +130,14 @@ app.whenReady().then(async () => {
     if (
       !(durationState.first > 0) ||
       durationState.second !== durationState.first ||
-      durationState.probes !== 1
+      durationState.probes !== 0
     )
       throw new Error('Duration probe was not cached: ' + JSON.stringify(durationState));
+    const bannerAccent = await window.webContents.executeJavaScript(
+      `bannerAccentFor(${JSON.stringify(path.join(__dirname, '..', 'assets', 'icons', 'radio.png'))})`,
+    );
+    if (!/^#[0-9a-f]{6}$/i.test(bannerAccent))
+      throw new Error('Renderer banner accent could not be computed');
     const result = await window.webContents.executeJavaScript(String.raw`(async () => {
       await Promise.all([
         document.fonts.load('400 12px "DM Mono"'),
