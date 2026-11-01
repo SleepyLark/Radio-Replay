@@ -170,16 +170,18 @@
           </div>
           <button id="editStation" class="logo-action">Edit station</button>
           <section class="now">
-            <div class="on-air">
-              <i></i>
-              ON AIR
+            <div class="now-content">
+              <div class="on-air">
+                <i></i>
+                ON AIR
+              </div>
+              <div id="titleViewport" class="title-viewport">
+                <div id="trackTitle" class="track-title" aria-live="polite">Ready when you are</div>
+              </div>
+              <div id="trackAlbum" class="track-album"></div>
+              <div id="metadata" class="metadata"></div>
+              <div id="playbackNotice" class="metadata" role="status"></div>
             </div>
-            <div id="titleViewport" class="title-viewport">
-              <div id="trackTitle" class="track-title" aria-live="polite">Ready when you are</div>
-            </div>
-            <div id="trackAlbum" class="track-album"></div>
-            <div id="metadata" class="metadata"></div>
-            <div id="playbackNotice" class="metadata" role="status"></div>
           </section>
           <section class="controls">
             <div class="transport-buttons">
@@ -226,9 +228,6 @@
               <output id="volumeValue" for="volume">80%</output>
             </div>
           </section>
-          <p class="how">
-            Your station keeps its own clock. Tune in wherever the broadcast is playing.
-          </p>
         </div>
       </section>
     </main>

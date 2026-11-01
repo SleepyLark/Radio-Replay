@@ -160,7 +160,18 @@ main {
   flex-shrink: 0;
 }
 .now {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   height: 138px;
+  overflow: hidden;
+}
+.now-content {
+  flex: none;
+  /* Keep the glow inside the clipping area without moving the centered text. */
+  padding: 12px;
+  margin: -12px;
+  max-height: calc(100% + 24px);
   overflow: hidden;
 }
 .title-viewport {
