@@ -7,6 +7,29 @@ The player is inspired by the station tuning found in games such as Grand Theft 
 > [!IMPORTANT]
 > This app was made heavily with the assistance of AI. If you don't like it, don't use it.
 
+<p align="center">
+  <img
+    src="docs/images/home.png"
+    alt="Radio Replay home screen with custom stations"
+    width="450"
+  >
+    <img
+    src="docs/images/station.png"
+    alt="station editor"
+    width="450"
+  >
+    <img
+    src="docs/images/player.png"
+    alt="now playing screen"
+    width="450"
+  >
+      <img
+    src="docs/images/lyrics.png"
+    alt="lyrics"
+    width="450"
+  >
+</p>
+
 ## Download
 
 Ready-to-run Windows, Linux, and macOS builds are attached to each project release. Download the build for your system from the [Releases page](../../releases) and run Radio Replay.
