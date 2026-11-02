@@ -1,0 +1,121 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check tag and package versions
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "const version=require('./package.json').version; const tag=process.env.GITHUB_REF_NAME; if (tag !== 'v' + version) { console.error('Tag ' + tag + ' does not match package version ' + version); process.exit(1) }"
+
+      - name: Check JavaScript syntax
+        run: npm run check
+
+      - name: Test duration cache
+        run: npm run test:cache
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            command: npm run package:win
+            artifact: radio-replay-windows-x64
+            files: release/*.exe
+          - label: Linux x64
+            os: ubuntu-latest
+            command: npm run package:linux
+            artifact: radio-replay-linux-x64
+            files: release/*.AppImage
+          - label: macOS Intel
+            os: macos-15-intel
+            command: npm run package:mac:x64
+            artifact: radio-replay-macos-x64
+            files: release/*.zip
+          - label: macOS Apple Silicon
+            os: macos-15
+            command: npm run package:mac:arm64
+            artifact: radio-replay-macos-arm64
+            files: release/*.zip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged applications
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create SHA-256 checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Create release and upload applications
+        run: >-
+          gh release create "$GITHUB_REF_NAME" release-assets/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "Radio Replay $GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}

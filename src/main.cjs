@@ -63,7 +63,7 @@ function createTray() {
   tray.on('click', showWindow);
 }
 const AUDIO = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.wav', '.flac']);
-const SIDEcars = new Set(['.lrc', '.txt', '.json']);
+const SIDEcars = new Set(['.lrc', '.txt']);
 const MAX_SIDECAR_BYTES = 1024 * 1024;
 const allowedAudio = new Set();
 let libraryRoot = '';

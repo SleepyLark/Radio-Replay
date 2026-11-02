@@ -521,27 +521,9 @@ for (const list of [$('#stationList'), $('#homeStations')]) {
 }
 
 function parse(raw) {
-  // Any audio file may have an adjacent LRC, text, or JSON sidecar.
+  // Any audio file may have an adjacent LRC or timestamped text sidecar.
   if (!raw) return null;
-  if (raw.extension === '.json') {
-    try {
-      const data = JSON.parse(raw.text);
-      if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-      return {
-        title: typeof data.title === 'string' ? data.title : '',
-        artist: typeof data.artist === 'string' ? data.artist : '',
-        album: typeof data.album === 'string' ? data.album : '',
-        timed: Array.isArray(data.timed)
-          ? data.timed
-              .slice(0, 20000)
-              .filter((x) => x && Number.isFinite(x.at) && x.at >= 0 && typeof x.text === 'string')
-              .sort((a, b) => a.at - b.at)
-          : [],
-      };
-    } catch {
-      return { timed: [] };
-    }
-  }
+  if (raw.extension !== '.lrc' && raw.extension !== '.txt') return null;
   const timed = [];
   for (const line of raw.text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     if (timed.length >= 20000) break;
@@ -610,12 +592,11 @@ async function showTrackDetails(track, station, currentToken) {
   if (currentToken !== token || displayedTrackPath !== track.path) return;
 
   sidecar = parse(sidecarFile);
-  const timedInfo = sidecar?.timed?.length ? sidecar : null;
-  const title = tags?.title || timedInfo?.title || track.name;
-  const artist = tags?.artist || timedInfo?.artist;
+  const title = tags?.title || track.name;
+  const artist = tags?.artist;
   displayedTrackTitle = artist ? `${artist} - ${title}` : title;
   $('#trackTitle').textContent = displayedTrackTitle;
-  $('#trackAlbum').textContent = tags?.album || timedInfo?.album || '';
+  $('#trackAlbum').textContent = tags?.album || '';
   metadata();
 }
 
@@ -1437,8 +1418,7 @@ function stationEditor(station = null, paths = []) {
     const hints = await Promise.all(
       sample.map(async (p) => {
         try {
-          const [raw, length] = await Promise.all([window.radio.readSidecar(p), probe(p)]);
-          return parse(raw)?.timed?.length > 0 || length >= 20 * 60;
+          return (await probe(p)) >= 20 * 60;
         } catch {
           return false;
         }

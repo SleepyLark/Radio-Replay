@@ -116,7 +116,7 @@
             </p>
             <label>
               Long title bounce speed
-              <input id="bounceSpeed" type="number" min="10" max="200" step="5" value="40" />
+              <input id="bounceSpeed" type="number" min="10" max="200" step="5" value="25" />
               pixels per second
             </label>
           </section>
@@ -132,7 +132,7 @@
             </p>
             <label>
               Default crossfade for shuffled tracks
-              <input id="globalFade" type="number" min="0" max="30000" step="1" value="0" />
+              <input id="globalFade" type="number" min="0" max="30000" step="100" value="5000" />
               ms
             </label>
             <p>
@@ -140,7 +140,7 @@
             </p>
             <h2>Tuning sound</h2>
             <label class="checkbox-setting">
-              <input id="tuningTransition" type="checkbox" />
+              <input id="tuningTransition" type="checkbox" checked/>
               Play a random static transition when tuning
             </label>
             <p>
@@ -149,12 +149,12 @@
             </p>
             <label>
               Minimum transition
-              <input id="tuningMinMs" type="number" min="0" max="1500" step="1" value="1000" />
+              <input id="tuningMinMs" type="number" min="0" max="1500" step="100" value="0" />
               ms
             </label>
             <label>
               Maximum transition
-              <input id="tuningMaxMs" type="number" min="0" max="1500" step="1" value="1000" />
+              <input id="tuningMaxMs" type="number" min="0" max="1500" step="100" value="1500" />
               ms
             </label>
             <label>

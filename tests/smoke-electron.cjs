@@ -151,7 +151,6 @@ app.whenReady().then(async () => {
           stationFormMarkup({ station: 'A" & <b>', crossfade: null }, ''), 'text/html'
         ).querySelector('#newName').value,
         lrc: parse({ extension: '.lrc', text: '\uFEFF[01:30.00][00:10.00]Chorus' }).timed,
-        safeJson: parse({ extension: '.json', text: '{"timed":{}}' }).timed,
         fonts: document.fonts.check('400 12px "DM Mono"') && document.fonts.check('600 24px Oswald'),
         page: !!document.querySelector('#stationList'),
       };
@@ -165,8 +164,7 @@ app.whenReady().then(async () => {
       result.name !== 'A" & <b>' ||
       result.lrc.length !== 2 ||
       result.lrc[0].at !== 10 ||
-      result.lrc[1].at !== 90 ||
-      result.safeJson.length !== 0
+      result.lrc[1].at !== 90
     )
       throw new Error(`Smoke test failed: ${JSON.stringify(result)}`);
     const editorState = await window.webContents.executeJavaScript(`(() => {
@@ -225,7 +223,6 @@ app.whenReady().then(async () => {
       return { firstTitle, secondTitle, broadcastLyric, lyric, ignored, plainTitle, plainLyric, beforeFirst,
         order: clock.order.map(t => t.name), fade: clock.fade,
         invalidLrc: parse({ extension: '.lrc', text: '[00:99]Invalid\nJust notes' }).timed.length,
-        invalidJson: parse({ extension: '.json', text: JSON.stringify({timed: [{at: -1, text: 'bad'}, {at: '2', text: 'bad'}]}) }).timed.length,
       };
     })()`);
     if (
@@ -239,8 +236,7 @@ app.whenReady().then(async () => {
       playbackState.beforeFirst !== 'Artist - Embedded title' ||
       playbackState.fade !== 0 ||
       playbackState.order.join(',') !== 'First recording,Second recording' ||
-      playbackState.invalidLrc ||
-      playbackState.invalidJson
+      playbackState.invalidLrc
     )
       throw new Error(`Broadcast metadata failed: ${JSON.stringify(playbackState)}`);
     const clockCacheState = await window.webContents.executeJavaScript(`(async () => {

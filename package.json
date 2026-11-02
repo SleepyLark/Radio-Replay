@@ -1,9 +1,10 @@
 {
   "name": "radio-replay",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "A local GTA-inspired radio player",
   "author": "Skylark",
   "license": "MIT",
+  "desktopName": "com.local.radioreplay.desktop",
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
@@ -15,7 +16,10 @@
     "test:metadata": "electron tests/metadata-electron.cjs",
     "smoke": "electron tests/smoke-electron.cjs",
     "icons": "electron scripts/build-icons.cjs",
-    "package:win": "electron-builder --win portable",
+    "package:win": "electron-builder --win portable --x64",
+    "package:linux": "electron-builder --linux AppImage --x64",
+    "package:mac:x64": "electron-builder --mac zip --x64",
+    "package:mac:arm64": "electron-builder --mac zip --arm64",
     "package": "electron-builder"
   },
   "devDependencies": {
@@ -28,6 +32,10 @@
   "build": {
     "appId": "com.local.radioreplay",
     "productName": "Radio Replay",
+    "asar": true,
+    "electronLanguages": [
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
@@ -51,8 +59,26 @@
     ],
     "win": {
       "icon": "assets/icons/radio.ico",
+      "artifactName": "Radio-Replay-${version}-Windows-${arch}.${ext}",
       "target": [
         "portable"
+      ]
+    },
+    "linux": {
+      "icon": "assets/icons/radio.svg",
+      "category": "AudioVideo",
+      "artifactName": "Radio-Replay-${version}-Linux-${arch}.${ext}",
+      "syncDesktopName": true,
+      "target": [
+        "AppImage"
+      ]
+    },
+    "mac": {
+      "icon": "assets/icons/radio.svg",
+      "category": "public.app-category.music",
+      "artifactName": "Radio-Replay-${version}-macOS-${arch}.${ext}",
+      "target": [
+        "zip"
       ]
     }
   },
