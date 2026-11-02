@@ -12,15 +12,15 @@ let hidden = [];
 let settings = {
   accent: '#c7f464',
   staticPath: 'bundled',
-  tuningTransition: false,
-  tuningMinMs: 1000,
-  tuningMaxMs: 1000,
-  crossfade: 0,
+  tuningTransition: true,
+  tuningMinMs: 0,
+  tuningMaxMs: 1500,
+  crossfade: 5000,
   randomNext: false,
-  bounceSpeed: 40,
-  matchBannerAccent: false,
+  bounceSpeed: 25,
+  matchBannerAccent: true,
   listDensity: 'comfortable',
-  bannerLayout: 'column',
+  bannerLayout: 'row',
   showScanlines: true,
   reduceMotion: false,
   showProgress: true,
@@ -68,6 +68,19 @@ function validStation(station) {
   );
 }
 
+function crossfadeMilliseconds(value, fallback) {
+  if (!Number.isFinite(value)) return fallback;
+  // Versions through 0.5.0 stored seconds. Values above the former 30-second limit are already ms.
+  const milliseconds = value > 0 && value <= 30 ? value * 1000 : value;
+  const rounded = Math.max(0, Math.min(30000, Math.round(milliseconds)));
+  return rounded === 0 ? 0 : Math.max(100, rounded);
+}
+
+function enteredCrossfadeMilliseconds(value) {
+  const milliseconds = Math.max(0, Math.min(30000, Math.round(Number(value) || 0)));
+  return milliseconds === 0 ? 0 : Math.max(100, milliseconds);
+}
+
 function sanitizeConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config))
     throw new Error('Invalid stations.json structure');
@@ -83,6 +96,8 @@ function sanitizeConfig(config) {
           ? station.textMode
           : 'auto',
         accent: /^#[0-9a-f]{6}$/i.test(station.accent) ? station.accent : '',
+        crossfade:
+          station.crossfade == null ? null : crossfadeMilliseconds(station.crossfade, null),
       }))
     : [];
   groups = Array.isArray(config.groups)
@@ -106,29 +121,34 @@ function sanitizeConfig(config) {
     config.settings && typeof config.settings === 'object' && !Array.isArray(config.settings)
       ? config.settings
       : {};
-  const tuningMs = (value) =>
-    Math.max(0, Math.min(1500, Math.round(Number.isFinite(value) ? value : 1000)));
-  const minimum = tuningMs(loaded.tuningMinMs),
-    maximum = tuningMs(loaded.tuningMaxMs);
+  const tuningMs = (value, fallback) =>
+    Math.max(0, Math.min(1500, Math.round(Number.isFinite(value) ? value : fallback)));
+  const minimum = tuningMs(loaded.tuningMinMs, settings.tuningMinMs),
+    maximum = tuningMs(loaded.tuningMaxMs, settings.tuningMaxMs);
   settings = {
     accent: typeof loaded.accent === 'string' ? loaded.accent : settings.accent,
     staticPath: typeof loaded.staticPath === 'string' ? loaded.staticPath : settings.staticPath,
-    tuningTransition: loaded.tuningTransition === true,
+    tuningTransition:
+      typeof loaded.tuningTransition === 'boolean'
+        ? loaded.tuningTransition
+        : settings.tuningTransition,
     tuningMinMs: Math.min(minimum, maximum),
     tuningMaxMs: Math.max(minimum, maximum),
-    crossfade: Number.isFinite(loaded.crossfade) ? loaded.crossfade : settings.crossfade,
+    crossfade: crossfadeMilliseconds(loaded.crossfade, settings.crossfade),
     randomNext: loaded.randomNext === true,
     bounceSpeed: Number.isFinite(loaded.bounceSpeed) ? loaded.bounceSpeed : settings.bounceSpeed,
-    matchBannerAccent: loaded.matchBannerAccent === true,
+    matchBannerAccent:
+      typeof loaded.matchBannerAccent === 'boolean'
+        ? loaded.matchBannerAccent
+        : settings.matchBannerAccent,
     listDensity: loaded.listDensity === 'compact' ? 'compact' : 'comfortable',
     // Preserve a previously chosen row layout when upgrading from station-level settings.
-    bannerLayout:
-      loaded.bannerLayout === 'row' ||
-      (loaded.bannerLayout == null &&
-        Array.isArray(config.custom) &&
-        config.custom.some((station) => station.bannerLayout === 'row'))
+    bannerLayout: ['row', 'column'].includes(loaded.bannerLayout)
+      ? loaded.bannerLayout
+      : Array.isArray(config.custom) &&
+          config.custom.some((station) => station.bannerLayout === 'row')
         ? 'row'
-        : 'column',
+        : settings.bannerLayout,
     showScanlines: loaded.showScanlines !== false,
     reduceMotion: loaded.reduceMotion === true,
     showProgress: loaded.showProgress !== false,
@@ -211,15 +231,13 @@ const visible = () => {
   );
 };
 const fadeFor = (s) =>
-  s.mode === 'tracks'
-    ? Math.max(0, Math.min(30, Number(s.crossfade ?? settings.crossfade) || 0))
-    : 0;
+  s.mode === 'tracks' ? crossfadeMilliseconds(s.crossfade ?? settings.crossfade, 0) / 1000 : 0;
 
 function applySettings() {
   applyAccent(selected);
   $('#accentColor').value = settings.accent || '#c7f464';
   $('#matchBannerAccent').checked = settings.matchBannerAccent;
-  $('#globalFade').value = Math.round((settings.crossfade ?? 0) * 1000);
+  $('#globalFade').value = settings.crossfade ?? 0;
   $('#bounceSpeed').value = settings.bounceSpeed ?? 40;
   $('#listDensity').value = settings.listDensity;
   $('#tuningTransition').checked = settings.tuningTransition;
@@ -1097,9 +1115,9 @@ function stationFormMarkup(station, logoPath, bannerPath) {
     <p id="textModeHelp"></p>
     <p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p>
     <div id="crossfadeField" hidden class="editor-section">
-      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(Math.round(settings.crossfade * 1000))} ms)</label>
-      <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30000" step="1"
-        value="${station?.crossfade == null ? '0' : Math.round(Math.min(30, station.crossfade) * 1000)}"> ms</label>
+      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(settings.crossfade)} ms)</label>
+      <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30000" step="100"
+        value="${station?.crossfade == null ? '0' : crossfadeMilliseconds(station.crossfade, 0)}"> ms</label>
     </div>
     </details>
     ${station ? '<button type="button" id="deleteStation" class="danger">Delete station</button>' : ''}
@@ -1295,8 +1313,7 @@ function stationEditor(station = null, paths = []) {
           station: entry.name,
           mode,
           textMode: $('#textMode').value,
-          // Store seconds internally so existing stations.json values remain compatible.
-          crossfade: override === '' ? null : Number(override) / 1000,
+          crossfade: override === '' ? null : enteredCrossfadeMilliseconds(override),
           spinLogo: !separate() && $('#spinLogo').checked,
           bannerPath: separate() ? '' : bannerPath,
           bannerColor: !separate() && $('#useBannerColor').checked ? $('#bannerColor').value : '',
@@ -1761,7 +1778,7 @@ $('#matchBannerAccent').onchange = (event) => {
   save();
 };
 $('#globalFade').onchange = (e) => {
-  settings.crossfade = Math.max(0, Math.min(30000, Math.round(Number(e.target.value) || 0))) / 1000;
+  settings.crossfade = enteredCrossfadeMilliseconds(e.target.value);
   for (const [key, clock] of clocks) if (clock.usesGlobalFade) clocks.delete(key);
   applySettings();
   save();

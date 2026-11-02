@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { isDeepStrictEqual } = require('node:util');
 const { pathToFileURL } = require('node:url');
 const indexPath = path.join(__dirname, '..', 'src', 'renderer', 'index.html');
 const indexUrl = pathToFileURL(indexPath).href;
@@ -112,6 +113,34 @@ app.whenReady().then(async () => {
     )
       throw new Error('Tray icon could not be loaded');
     await window.loadFile(indexPath);
+    for (let i = 0; i < 100 && !savedConfig; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    const expectedDefaults = {
+      version: 2,
+      root: '',
+      custom: [],
+      groups: [],
+      logos: {},
+      hidden: [],
+      settings: {
+        accent: '#c7f464',
+        staticPath: 'bundled',
+        tuningTransition: true,
+        tuningMinMs: 0,
+        tuningMaxMs: 1500,
+        crossfade: 5000,
+        randomNext: false,
+        bounceSpeed: 25,
+        matchBannerAccent: true,
+        listDensity: 'comfortable',
+        bannerLayout: 'row',
+        showScanlines: true,
+        reduceMotion: false,
+        showProgress: true,
+      },
+    };
+    if (!isDeepStrictEqual(savedConfig, expectedDefaults))
+      throw new Error(`First-run defaults failed: ${JSON.stringify(savedConfig)}`);
     await fs.copyFile(fixture, durationFixture);
     probeCache = new DurationCache(path.join(profilePath, 'renderer-duration-cache.sqlite'));
     // This fixture must start cold even when the smoke profile survives a previous run.
@@ -690,7 +719,8 @@ app.whenReady().then(async () => {
     }
     const staticState = await window.webContents.executeJavaScript(`(async () => {
       staticAudio.muted = true; audio.muted = true;
-      settings.staticPath = 'bundled'; settings.tuningTransition = true; applySettings();
+      settings.staticPath = 'bundled'; settings.tuningTransition = true;
+      settings.tuningMinMs = settings.tuningMaxMs = 1000; applySettings();
       const originalRandom = Math.random;
       Math.random = () => 0.5;
       const started = performance.now();
@@ -773,19 +803,24 @@ app.whenReady().then(async () => {
       throw new Error('Tuning range/loading failed: ' + JSON.stringify(tuningRangeState));
     const settingsState = await window.webContents.executeJavaScript(`(async () => {
       const previousFade = settings.crossfade;
+      const legacyConfig = JSON.parse(JSON.stringify({root, custom, groups, logos, hidden, settings}));
+      legacyConfig.settings.crossfade = 1.25; sanitizeConfig(legacyConfig); applySettings();
+      const legacyGlobal = settings.crossfade === 1250 && Number($('#globalFade').value) === 1250;
+      $('#globalFade').value = 25; $('#globalFade').dispatchEvent(new Event('change'));
+      const minimum = settings.crossfade === 100 && Number($('#globalFade').value) === 100;
       $('#globalFade').value = 1250; $('#globalFade').dispatchEvent(new Event('change'));
-      const global = settings.crossfade === 1.25 && Number($('#globalFade').value) === 1250;
+      const global = settings.crossfade === 1250 && Number($('#globalFade').value) === 1250;
       stationEditor({key:'fade-ms', station: 'Fade', mode: 'tracks', crossfade: 2.5, tracks:[{path:'C:/Music/first.mp3', name:'First'}]});
       const restored = Number($('#stationFade').value) === 2500;
       $('#stationFade').value = 1500; $('#editorSave').click();
-      const saved = custom.find(s => s.key === 'fade-ms').crossfade === 1.5;
+      const saved = custom.find(s => s.key === 'fade-ms').crossfade === 1500;
       const before = audio.paused;
       $('#clearDurationCache').click();
       await new Promise(resolve => setTimeout(resolve, 80));
       const cleared = $('#cacheStatus').textContent.includes('cache cleared') && !$('#clearDurationCache').disabled && clocks.size === 0 && audio.paused === before;
       const missing = (await window.radio.lookupDuration(${JSON.stringify(durationFixture)})).duration === 0;
       settings.crossfade = previousFade; applySettings();
-      return {global, restored, saved, cleared, missing};
+      return {legacyGlobal, minimum, global, restored, saved, cleared, missing};
     })()`);
     if (Object.values(settingsState).some((value) => !value))
       throw new Error('Settings controls failed: ' + JSON.stringify(settingsState));

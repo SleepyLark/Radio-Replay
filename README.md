@@ -13,6 +13,7 @@ Ready-to-run Windows, Linux, and macOS builds are attached to each project relea
 
 Release builds include everything required to use the app. You do not need Node.js, npm, or a development environment unless you want to build Radio Replay from source.
 
+> [!WARNING]
 > Release builds are currently unsigned. Windows may show a SmartScreen warning, and macOS may require you to approve the app in Privacy & Security before opening it for the first time.
 
 ## Major features
