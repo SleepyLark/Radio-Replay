@@ -189,4 +189,3 @@ The packaged application is written to `release/`. Build output is not committed
 | `package.json`             | Dependencies, scripts, and packaging configuration      |
 
 Radio Replay is built with Electron and uses `music-metadata` for isolated audio metadata and duration parsing.
-

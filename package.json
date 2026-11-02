@@ -16,11 +16,11 @@
     "test:metadata": "electron tests/metadata-electron.cjs",
     "smoke": "electron tests/smoke-electron.cjs",
     "icons": "electron scripts/build-icons.cjs",
-    "package:win": "electron-builder --win portable --x64",
-    "package:linux": "electron-builder --linux AppImage --x64",
-    "package:mac:x64": "electron-builder --mac zip --x64",
-    "package:mac:arm64": "electron-builder --mac zip --arm64",
-    "package": "electron-builder"
+    "package:win": "electron-builder --win portable --x64 --publish never",
+    "package:linux": "electron-builder --linux AppImage --x64 --publish never",
+    "package:mac:x64": "electron-builder --mac zip --x64 --publish never",
+    "package:mac:arm64": "electron-builder --mac zip --arm64 --publish never",
+    "package": "electron-builder --publish never"
   },
   "devDependencies": {
     "@fontsource/dm-mono": "^5.3.0",
