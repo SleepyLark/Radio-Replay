@@ -18,6 +18,8 @@ The player is inspired by the station tuning found in games such as Grand Theft 
     alt="station editor"
     width="450"
   >
+</p>
+<p align = "center">
     <img
     src="docs/images/player.png"
     alt="now playing screen"
@@ -79,7 +81,7 @@ For broadcasts containing several recordings, use the controls beside each file 
 
 ### 3. Customize the station
 
-The station editor is divided into **Essentials**, **Appearance**, and **Advanced** sections. You can change the station name and files, add a logo or background, choose colors, enable logo rotation, and override playback or timestamp settings.
+You can change the station name and files, add a logo or background (supports .PNG, .JPG, .WEBP, and .GIF), choose colors, enable logo rotation, and override playback or timestamp settings.
 
 Use **Manage stations** to edit or remove stations later. Removing a station from Radio Replay never deletes its source audio or artwork.
 
@@ -127,7 +129,7 @@ Radio Replay reads standard timestamped lines:
 
 For music stations, timed text is shown as synchronized lyrics by default. For broadcasts, it is used as the current track or segment title. You can change this under **Edit station → Advanced → Use timestamped text as**.
 
-Timestamped `.txt` files with the same syntax are also supported. Untimed text and malformed timestamps are ignored. Note that currently it only supports timestamps formatted as `[mm:ss.ms]` it does **not** support `[hh:mm:ss.ms]`, meaning a 2 hours would use 240 minutes as the timestamp.
+Timestamped `.txt` files with the same syntax are also supported. Untimed text and malformed timestamps are ignored. Note that currently it only supports timestamps formatted as `[mm:ss.ms]`; it currently does **not** support `[hh:mm:ss.ms]`, meaning 2 hours would be 240 minutes for the timestamp.
 
 ## Settings and saved data
 
@@ -181,7 +183,7 @@ npm run package:mac:x64
 npm run package:mac:arm64
 ```
 
-The packaged application is written to `release/`. Build output is not committed to the repository. Build each target on its matching operating system; the GitHub Actions workflow handles this automatically.
+The packaged application is written to `release/`.
 
 ## Development commands
 
