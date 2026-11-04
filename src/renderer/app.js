@@ -1,5 +1,5 @@
 const $ = (q) => document.querySelector(q);
-// Only `audio` is audible during normal playback. `spare` is used during crossfades.
+// Keep the next recording ready on `spare` for ordered handoffs and crossfades.
 let audio = $('#audio');
 let spare = $('#audioNext');
 const staticAudio = $('#staticAudio');
@@ -37,6 +37,7 @@ let token = 0;
 let importPaths = [];
 let currentIndex = 0;
 let currentClock = null;
+let bufferedBroadcast = null;
 let fading = false;
 let fadeTimer = null;
 let stepTimer = null;
@@ -160,27 +161,46 @@ function invalidateStationClock(stationKey) {
   for (const key of clocks.keys()) if (key.endsWith(':' + stationKey)) clocks.delete(key);
 }
 
-function updateTitleBounce() {
+const titleMotionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+let titleBounceAnimation;
+let titleBounceKey;
+
+function updateTitleBounce(reset = false) {
   const viewport = $('#titleViewport');
   const title = $('#trackTitle');
   const overflow = Math.ceil(title.scrollWidth - viewport.clientWidth);
   title.classList.toggle('bouncing', overflow > 0);
-  if (overflow > 0) {
-    title.style.setProperty('--bounce-distance', `${overflow}px`);
-    title.style.setProperty(
-      '--bounce-duration',
-      `${overflow / (Number(settings.bounceSpeed) || 40)}s`,
-    );
-  }
+  const motionDisabled = settings.reduceMotion || titleMotionPreference.matches;
+  const speed = Number(settings.bounceSpeed) || 40;
+  const key = overflow > 0 && !motionDisabled ? `${overflow}:${speed}` : '';
+  if (!reset && key === titleBounceKey) return;
+  titleBounceAnimation?.cancel();
+  titleBounceAnimation = undefined;
+  titleBounceKey = key;
+  if (!key) return;
+
+  const pauseMs = 800;
+  const duration = (overflow / speed) * 1000 + pauseMs;
+  const hold = pauseMs / 2 / duration;
+  titleBounceAnimation = title.animate(
+    [
+      { transform: 'translateX(0)', offset: 0 },
+      { transform: 'translateX(0)', offset: hold, easing: 'cubic-bezier(0.15, 0, 0.85, 1)' },
+      { transform: `translateX(-${overflow}px)`, offset: 1 - hold },
+      { transform: `translateX(-${overflow}px)`, offset: 1 },
+    ],
+    { duration, iterations: Infinity, direction: 'alternate' },
+  );
 }
 
 // LRC updates the title during playback, so observe text and available width.
-new MutationObserver(updateTitleBounce).observe($('#trackTitle'), {
+new MutationObserver(() => updateTitleBounce(true)).observe($('#trackTitle'), {
   childList: true,
   characterData: true,
   subtree: true,
 });
-new ResizeObserver(updateTitleBounce).observe($('#titleViewport'));
+new ResizeObserver(() => updateTitleBounce()).observe($('#titleViewport'));
+titleMotionPreference.addEventListener('change', () => updateTitleBounce());
 
 // All user edits go through the main process so the config file remains outside the bundle.
 const save = () =>
@@ -231,7 +251,7 @@ const visible = () => {
   );
 };
 const fadeFor = (s) =>
-  s.mode === 'tracks' ? crossfadeMilliseconds(s.crossfade ?? settings.crossfade, 0) / 1000 : 0;
+  crossfadeMilliseconds(s.crossfade ?? (s.mode === 'tracks' ? settings.crossfade : 0), 0) / 1000;
 
 function applySettings() {
   applyAccent(selected);
@@ -324,7 +344,7 @@ function applyStationVisuals(station) {
 }
 
 function updateLogoMotion() {
-  $('#logo').classList.toggle('is-playing', !!selected && !audio.paused);
+  $('#logo').classList.toggle('is-playing', !!selected && (bufferedBroadcast?.playing || !audio.paused));
 }
 
 let staticAbort = null;
@@ -424,6 +444,7 @@ function stopFade() {
   fadeTimer = null;
   fading = false;
   spare.pause();
+  spare.loop = false;
   spare.removeAttribute('src');
   spare.load();
   audio.volume = Number($('#volume').value) / 100;
@@ -576,7 +597,7 @@ function metadata() {
       high = sidecar.timed.length;
     while (low < high) {
       const middle = (low + high) >> 1;
-      if (sidecar.timed[middle].at <= audio.currentTime) low = middle + 1;
+      if (sidecar.timed[middle].at <= playbackSeconds()) low = middle + 1;
       else high = middle;
     }
     currentLine = sidecar.timed[low - 1]?.text;
@@ -751,6 +772,132 @@ function position(clock) {
   }
 }
 
+function playbackSeconds() {
+  const state = bufferedBroadcast;
+  if (!state?.entries.length) return audio.currentTime;
+  const entry = state.entries[0];
+  return Math.max(0, Math.min(entry.buffer.duration, entry.offset + state.context.currentTime - entry.when));
+}
+
+function updatePlaybackProgress() {
+  const duration = bufferedBroadcast?.entries[0]?.buffer.duration ?? audio.duration;
+  const seconds = playbackSeconds();
+  $('#time').textContent = `${fmt(seconds)} / ${fmt(duration)}`;
+  $('#recordingProgress').value = Number.isFinite(duration) && duration > 0 ? seconds / duration : 0;
+  metadata();
+}
+
+function stopBufferedBroadcast() {
+  const state = bufferedBroadcast;
+  if (!state) return;
+  bufferedBroadcast = null;
+  clearInterval(state.timer);
+  for (const entry of state.entries) {
+    entry.source.onended = null;
+    try { entry.source.stop(); } catch { /* It may have already ended. */ }
+  }
+  state.context.close().catch(() => {});
+}
+
+async function decodeBroadcastTrack(state, track) {
+  const cached = state.buffers.get(track.path);
+  if (cached) return cached;
+  const bytes = await window.radio.readForGapless(track.path);
+  const buffer = await state.context.decodeAudioData(
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  );
+  if (buffer.duration > 600) throw new Error('Recording is too long for buffered playback');
+  state.buffers.set(track.path, buffer);
+  return buffer;
+}
+
+function scheduleBroadcastEntry(state, index, buffer, when, offset = 0) {
+  const source = state.context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(state.gain);
+  const entry = { index, buffer, source, when, offset, endAt: when + buffer.duration - offset };
+  source.onended = () => {
+    if (bufferedBroadcast !== state || state.entries[0] !== entry) return;
+    state.entries.shift();
+    if (!state.entries.length) {
+      stopBufferedBroadcast();
+      advance();
+      return;
+    }
+    currentIndex = state.entries[0].index;
+    if (!state.entries.some((item) => state.clock.order[item.index].path === state.clock.order[index].path))
+      state.buffers.delete(state.clock.order[index].path);
+    showTrackDetails(state.clock.order[currentIndex], state.station, state.token).catch(() => {});
+    updatePlaybackProgress();
+    scheduleFollowingBroadcastEntry(state).catch(() => {});
+  };
+  source.start(when, offset);
+  state.entries.push(entry);
+  return entry;
+}
+
+async function scheduleFollowingBroadcastEntry(state) {
+  if (state.loading || bufferedBroadcast !== state || state.entries.length >= 3) return;
+  state.loading = true;
+  try {
+    const tail = state.entries.at(-1);
+    const index = (tail.index + 1) % state.clock.order.length;
+    const buffer = await decodeBroadcastTrack(state, state.clock.order[index]);
+    if (bufferedBroadcast !== state) return;
+    scheduleBroadcastEntry(state, index, buffer, tail.endAt);
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function startBufferedBroadcast(clock, index, offset, station, current) {
+  if (station.mode !== 'longset' || clock.fade || clock.order.length < 2 ||
+      clock.lengths.some((length) => !length || length > 600)) return false;
+  const context = new AudioContext();
+  const state = {
+    context, gain: context.createGain(), buffers: new Map(), entries: [],
+    clock, station, token: current, loading: false, playing: true, timer: null,
+  };
+  state.gain.gain.value = muted ? 0 : Number($('#volume').value) / 100;
+  state.gain.connect(context.destination);
+  try {
+    const first = await decodeBroadcastTrack(state, clock.order[index]);
+    const nextIndex = (index + 1) % clock.order.length;
+    const next = await decodeBroadcastTrack(state, clock.order[nextIndex]);
+    if (current !== token) return false;
+    await context.resume();
+    if (current !== token) return false;
+    bufferedBroadcast = state;
+    const start = context.currentTime + 0.1;
+    const firstEntry = scheduleBroadcastEntry(state, index, first, start,
+      Math.min(offset, Math.max(0, first.duration - 0.1)));
+    scheduleBroadcastEntry(state, nextIndex, next, firstEntry.endAt);
+    state.timer = setInterval(updatePlaybackProgress, 100);
+    scheduleFollowingBroadcastEntry(state).catch(() => {});
+    $('#play').textContent = '❚❚';
+    updateLogoMotion();
+    return true;
+  } catch {
+    if (bufferedBroadcast === state) stopBufferedBroadcast();
+    return false;
+  } finally {
+    if (bufferedBroadcast !== state) context.close().catch(() => {});
+  }
+}
+
+function preloadNext() {
+  if (!currentClock || currentClock.order.length < 2 || !selected) return;
+  const nextTrack = currentClock.order[(currentIndex + 1) % currentClock.order.length];
+  if (unavailable.has(nextTrack.path)) return;
+  const source = url(nextTrack.path);
+  spare.loop = false;
+  if (spare.src !== source) {
+    spare.preload = 'auto';
+    spare.src = source;
+    spare.load();
+  }
+}
+
 function startFade() {
   // Mix the outgoing and incoming elements, then swap their roles for the next track.
   if (fading || !currentClock?.fade || !selected || audio.paused) return;
@@ -785,6 +932,7 @@ function startFade() {
           audio = incoming;
           spare = outgoing;
           currentIndex = nextIndex;
+          preloadNext();
           updateLogoMotion();
           showTrackDetails(currentClock.order[nextIndex], selected, token).catch(() => {});
         }
@@ -811,15 +959,28 @@ async function advance() {
     const track = order[nextIndex];
     if (unavailable.has(track.path)) continue;
     try {
-      audio.src = url(track.path);
-      await waitForMetadata(audio, current);
+      const incoming = spare.src === url(track.path) && !spare.error ? spare : audio;
+      if (incoming === audio) incoming.src = url(track.path);
+      await waitForMetadata(incoming, current);
       if (current !== token) return;
-      audio.currentTime = 0;
-      await audio.play();
+      incoming.currentTime = 0;
+      incoming.loop = order.length === 1;
+      incoming.volume = Number($('#volume').value) / 100;
+      await incoming.play();
       if (current !== token) return;
+      if (incoming === spare) {
+        const outgoing = audio;
+        audio = spare;
+        spare = outgoing;
+        spare.removeAttribute('src');
+        spare.load();
+        $('#play').textContent = '❚❚';
+        updateLogoMotion();
+      }
       commitStationVisit(station);
       clock.origin = performance.now();
       clock.offset = clock.steps.slice(0, nextIndex).reduce((sum, step) => sum + step, 0);
+      preloadNext();
       showTrackDetails(track, station, current).catch(() => {});
       return;
     } catch {
@@ -893,8 +1054,10 @@ async function tune(s, navigation = null) {
   stepTarget = null;
   stepHistoryIndex = null;
   pendingStationVisit = { key: s.key, group: groupId, navigation };
+  stopBufferedBroadcast();
   stopFade();
   audio.pause();
+  audio.loop = false;
   currentClock = null;
   sidecar = null;
   displayedTrackPath = '';
@@ -932,6 +1095,12 @@ async function tune(s, navigation = null) {
       await advance();
       return;
     }
+    if (await startBufferedBroadcast(clock, p.index, p.seconds, s, current)) {
+      showTrackDetails(track, s, current).catch(() => {});
+      commitStationVisit(s);
+      return;
+    }
+    if (current !== token) return;
     audio.src = url(track.path);
     await waitForMetadata(audio, current);
     if (current !== token) return;
@@ -939,8 +1108,12 @@ async function tune(s, navigation = null) {
       ? Math.min(p.seconds, Math.max(0, audio.duration - 0.1))
       : Math.max(0, p.seconds);
     showTrackDetails(track, s, current).catch(() => {});
+    audio.loop = clock.order.length === 1;
+    preloadNext();
     await audio.play();
-    if (current === token) commitStationVisit(s);
+    if (current === token) {
+      commitStationVisit(s);
+    }
   } catch (error) {
     if (current === token) {
       const path = currentClock?.order[currentIndex]?.path;
@@ -1114,8 +1287,8 @@ function stationFormMarkup(station, logoPath, bannerPath) {
     </label>
     <p id="textModeHelp"></p>
     <p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p>
-    <div id="crossfadeField" hidden class="editor-section">
-      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> Default crossfade (from Settings: ${esc(settings.crossfade)} ms)</label>
+    <div id="crossfadeField" class="editor-section">
+      <label class="editor-check"><input id="useGlobalFade" type="checkbox" ${station?.crossfade == null ? 'checked' : ''}> <span id="defaultFadeLabel"></span></label>
       <label id="stationFadeLabel" class="inline-number">Station crossfade <input id="stationFade" type="number" min="0" max="30000" step="100"
         value="${station?.crossfade == null ? '0' : crossfadeMilliseconds(station.crossfade, 0)}"> ms</label>
     </div>
@@ -1273,7 +1446,7 @@ function stationEditor(station = null, paths = []) {
           : 'Enter a name and add at least one audio file.';
         return false;
       }
-      const customFade = mode === 'tracks' && !$('#useGlobalFade').checked;
+      const customFade = !$('#useGlobalFade').checked;
       const override = customFade ? $('#stationFade').value.trim() : '';
       if (
         customFade &&
@@ -1360,8 +1533,11 @@ function stationEditor(station = null, paths = []) {
     $('#stationAccent').disabled = !$('#useStationAccent').checked;
   };
   const updateCrossfadeVisibility = () => {
-    $('#crossfadeField').hidden = $('#newMode').value !== 'tracks';
-    const disabled = $('#useGlobalFade').checked || $('#crossfadeField').hidden;
+    $('#defaultFadeLabel').textContent =
+      $('#newMode').value === 'longset'
+        ? 'No crossfade (gapless for supported files)'
+        : `Default crossfade (from Settings: ${settings.crossfade} ms)`;
+    const disabled = $('#useGlobalFade').checked;
     $('#stationFade').disabled = disabled;
     $('#stationFadeLabel').classList.toggle('disabled-field', disabled);
   };
@@ -1381,7 +1557,7 @@ function stationEditor(station = null, paths = []) {
     const broadcast = $('#newMode').value === 'longset';
     $('#fileOrderHelp').hidden = !broadcast || batch;
     $('#playbackHelp').textContent = broadcast
-      ? 'Recordings play in the order below, then loop. Timestamps supply song titles by default.'
+      ? 'Recordings play in order and loop. Files up to 10 minutes and 64 MB use precise gapless scheduling. Timestamps supply song titles by default.'
       : 'Files play in a shuffled order. Timestamps supply lyrics by default.';
     $('#textModeHelp').textContent =
       `Default from playback style: ${broadcast ? 'Track titles' : 'Lyrics'}. This applies to every file in the station.`;
@@ -1532,6 +1708,7 @@ function stationEditor(station = null, paths = []) {
       if (selected?.key === station.key) {
         selected = null;
         ++token;
+        stopBufferedBroadcast();
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
@@ -1665,6 +1842,7 @@ function manageStations() {
       if (selected && keys.has(selected.key)) {
         selected = null;
         ++token;
+        stopBufferedBroadcast();
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
@@ -1844,6 +2022,7 @@ $('#groupSelect').onchange = (e) => {
   else if (visible().length) tune(visible()[0]);
   else {
     ++token;
+    stopBufferedBroadcast();
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
@@ -1854,7 +2033,14 @@ $('#editStation').onclick = () => {
 };
 $('#showConfig').onclick = () => window.radio.showConfig();
 $('#play').onclick = () => {
-  if (!audio.src && stations.length) tune(stations[0]);
+  if (bufferedBroadcast) {
+    const state = bufferedBroadcast;
+    state.playing = !state.playing;
+    if (state.playing) state.context.resume().catch(() => {});
+    else state.context.suspend().catch(() => {});
+    $('#play').textContent = state.playing ? '❚❚' : '▶';
+    updateLogoMotion();
+  } else if (!audio.src && stations.length) tune(stations[0]);
   else if (audio.paused) {
     audio.play();
     if (fading) spare.play();
@@ -1870,6 +2056,7 @@ $('#next').onclick = () => step(1);
 let muted = false;
 function updateVolume() {
   const value = Number($('#volume').value);
+  if (bufferedBroadcast) bufferedBroadcast.gain.gain.value = muted ? 0 : value / 100;
   if (!fading) audio.volume = value / 100;
   staticAudio.volume = value / 200;
   for (const element of [audio, spare, staticAudio]) element.muted = muted;
@@ -1919,27 +2106,13 @@ updateVolume();
 for (const element of [audio, spare]) {
   element.addEventListener('timeupdate', () => {
     if (element !== audio) return;
-    $('#time').textContent = `${fmt(audio.currentTime)} / ${fmt(audio.duration)}`;
-    $('#recordingProgress').value =
-      Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.currentTime / audio.duration
-        : 0;
-    metadata();
+    updatePlaybackProgress();
     if (
-      currentClock?.fade &&
+      currentClock &&
       !fading &&
       Number.isFinite(audio.duration) &&
       audio.currentTime >= audio.duration - Math.max(10, currentClock.fade + 5)
-    ) {
-      const nextTrack = currentClock.order[(currentIndex + 1) % currentClock.order.length];
-      if (nextTrack && !unavailable.has(nextTrack.path)) {
-        const source = url(nextTrack.path);
-        if (spare.src !== source) {
-          spare.preload = 'auto';
-          spare.src = source;
-        }
-      }
-    }
+    ) preloadNext();
     if (
       currentClock?.fade &&
       !fading &&
@@ -1977,10 +2150,10 @@ const stationMediaActions = {
   nexttrack: () => step(1),
   previoustrack: () => step(-1),
   play: () => {
-    if (audio.paused) $('#play').click();
+    if (bufferedBroadcast ? !bufferedBroadcast.playing : audio.paused) $('#play').click();
   },
   pause: () => {
-    if (!audio.paused) $('#play').click();
+    if (bufferedBroadcast ? bufferedBroadcast.playing : !audio.paused) $('#play').click();
   },
 };
 for (const [action, handler] of Object.entries(stationMediaActions))

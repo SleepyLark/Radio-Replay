@@ -282,17 +282,6 @@ header {
 }
 .track-title.bouncing {
   min-width: 0;
-  animation: title-bounce var(--bounce-duration) ease-in-out infinite alternate;
-}
-@keyframes title-bounce {
-  to {
-    transform: translateX(calc(-1 * var(--bounce-distance)));
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .track-title.bouncing {
-    animation: none;
-  }
 }
 .track-album,
 .metadata {

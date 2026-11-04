@@ -73,7 +73,7 @@ When a folder is imported, its name is used as the station name if the name fiel
 ### 2. Choose a playback style
 
 - **Music station** shuffles the station's tracks and can crossfade between them.
-- **Radio broadcast** plays recordings in the order shown, then loops back to the beginning.
+- **Radio broadcast** plays recordings in the order shown, then loops back to the beginning. Files up to 10 minutes and 64 MB are decoded and scheduled together for gapless playback. Larger recordings use streaming playback. Broadcasts have no crossfade by default; you can set one under **Edit station → Advanced**.
 
 If one of the sampled files is at least 20 minutes long, Radio Replay suggests broadcast playback. This is only a suggestion; you can choose either style.
 

@@ -24,5 +24,6 @@ contextBridge.exposeInMainWorld('radio', {
   lookupDuration: (audioPath) => ipcRenderer.invoke('duration:lookup', audioPath),
   lookupDurations: (paths) => ipcRenderer.invoke('duration:lookupMany', paths),
   measureDuration: (audioPath) => ipcRenderer.invoke('duration:measure', audioPath),
+  readForGapless: (audioPath) => ipcRenderer.invoke('audio:readForGapless', audioPath),
   clearDurationCache: () => ipcRenderer.invoke('duration:clear'),
 });

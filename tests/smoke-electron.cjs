@@ -15,6 +15,19 @@ let droppedPaths = [];
 let probeCache;
 let clockLookups = 0;
 const durationFixture = path.join(profilePath, 'duration-probe.mp3');
+const gaplessFixtures = [path.join(profilePath, 'gapless-first.wav'), path.join(profilePath, 'gapless-second.wav')];
+function wavTone(seconds) {
+  const samples = Math.round(seconds * 48000);
+  const buffer = Buffer.alloc(44 + samples * 2);
+  buffer.write('RIFF', 0); buffer.writeUInt32LE(buffer.length - 8, 4); buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20); buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(48000, 24); buffer.writeUInt32LE(96000, 28);
+  buffer.writeUInt16LE(2, 32); buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36); buffer.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i++)
+    buffer.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / 48000) * 12000), 44 + i * 2);
+  return buffer;
+}
 
 for (const [channel, response] of [
   ['static:bundled', path.join(__dirname, '..', 'assets', 'audio', 'static.mp3')],
@@ -62,6 +75,10 @@ ipcMain.handle('duration:measure', async (event, file) => {
     return 12.34;
   }
   return 0;
+});
+ipcMain.handle('audio:readForGapless', (event, file) => {
+  if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
+  return fs.readFile(file);
 });
 ipcMain.handle('duration:remember', (event, file, signature, duration) => {
   if (event.senderFrame?.url !== indexUrl) throw new Error('Unexpected renderer URL');
@@ -142,6 +159,7 @@ app.whenReady().then(async () => {
     if (!isDeepStrictEqual(savedConfig, expectedDefaults))
       throw new Error(`First-run defaults failed: ${JSON.stringify(savedConfig)}`);
     await fs.copyFile(fixture, durationFixture);
+    await Promise.all(gaplessFixtures.map((file, index) => fs.writeFile(file, wavTone(index ? 1 : 0.5))));
     probeCache = new DurationCache(path.join(profilePath, 'renderer-duration-cache.sqlite'));
     // This fixture must start cold even when the smoke profile survives a previous run.
     probeCache.open();
@@ -816,14 +834,59 @@ app.whenReady().then(async () => {
       const saved = custom.find(s => s.key === 'fade-ms').crossfade === 1500;
       const before = audio.paused;
       $('#clearDurationCache').click();
-      await new Promise(resolve => setTimeout(resolve, 80));
-      const cleared = $('#cacheStatus').textContent.includes('cache cleared') && !$('#clearDurationCache').disabled && clocks.size === 0 && audio.paused === before;
+      for (let i = 0; i < 50 && $('#clearDurationCache').disabled; i++)
+        await new Promise(resolve => setTimeout(resolve, 20));
+      const clearDetails = {status: $('#cacheStatus').textContent, enabled: !$('#clearDurationCache').disabled, clocks: clocks.size, before, after: audio.paused};
+      const cleared = clearDetails.status.includes('cache cleared') && clearDetails.enabled && clearDetails.clocks === 0 && clearDetails.after === before;
       const missing = (await window.radio.lookupDuration(${JSON.stringify(durationFixture)})).duration === 0;
       settings.crossfade = previousFade; applySettings();
-      return {legacyGlobal, minimum, global, restored, saved, cleared, missing};
+      return {legacyGlobal, minimum, global, restored, saved, cleared, missing, clearDetails};
     })()`);
-    if (Object.values(settingsState).some((value) => !value))
+    if (Object.entries(settingsState).some(([key, value]) => key !== 'clearDetails' && !value))
       throw new Error('Settings controls failed: ' + JSON.stringify(settingsState));
+    const broadcastState = await window.webContents.executeJavaScript(`(async () => {
+      const first = ${JSON.stringify(fixture)}, second = ${JSON.stringify(durationFixture)};
+      const tracks = [{path: first, name: 'First'}, {path: second, name: 'Second'}];
+      const station = {key: 'broadcast-fade', station: 'Broadcast fade', mode: 'longset', tracks};
+      const defaultFade = fadeFor(station) === 0;
+      stationEditor(station);
+      const defaultChoice = $('#useGlobalFade').checked && $('#defaultFadeLabel').textContent.includes('No crossfade');
+      $('#useGlobalFade').checked = false; $('#useGlobalFade').dispatchEvent(new Event('change'));
+      $('#stationFade').value = 750; $('#editorSave').click();
+      const saved = custom.find(s => s.key === station.key);
+      const override = saved?.crossfade === 750 && fadeFor(saved) === 0.75;
+      stationEditor(saved);
+      const restored = !$('#useGlobalFade').checked && Number($('#stationFade').value) === 750;
+      $('#editor').close();
+      stopFade(); audio.pause();
+      selected = station;
+      currentClock = {order: tracks, lengths: [2, 2], steps: [2, 2], fade: 0, total: 4, origin: performance.now(), offset: 0};
+      currentIndex = 0;
+      audio.src = url(first);
+      await waitForMetadata(audio, token);
+      spare.preload = 'auto'; spare.src = url(second); spare.load();
+      await waitForMetadata(spare, token);
+      const prepared = spare.readyState >= HTMLMediaElement.HAVE_METADATA;
+      const incoming = spare;
+      await advance();
+      const handoffDetails = {same: audio === incoming, index: currentIndex, playing: !audio.paused, preloaded: spare.src === url(first), source: spare.src};
+      const handoff = handoffDetails.same && handoffDetails.index === 1 && handoffDetails.playing && handoffDetails.preloaded;
+      audio.pause(); stopFade();
+      const buffered = await startBufferedBroadcast(currentClock, 0, 0, station, token);
+      const scheduled = buffered && bufferedBroadcast.entries.length >= 2 &&
+        bufferedBroadcast.entries[1].when === bufferedBroadcast.entries[0].endAt;
+      stopBufferedBroadcast();
+      const gaplessTracks = ${JSON.stringify(gaplessFixtures)}.map((path, index) => ({path, name: 'Gapless ' + index}));
+      currentClock = {order: gaplessTracks, lengths: [0.5, 1], steps: [0.5, 1], fade: 0, total: 1.5};
+      currentIndex = 0;
+      const started = await startBufferedBroadcast(currentClock, 0, 0, station, token);
+      await new Promise(resolve => setTimeout(resolve, 750));
+      const transitioned = started && bufferedBroadcast?.entries[0]?.index === 1 && currentIndex === 1;
+      ++token; stopBufferedBroadcast(); audio.pause(); selected = null; currentClock = null;
+      return {defaultFade, defaultChoice, override, restored, prepared, handoff, scheduled, transitioned, handoffDetails};
+    })()`);
+    if (Object.entries(broadcastState).some(([key, value]) => key !== 'handoffDetails' && !value))
+      throw new Error('Broadcast transition failed: ' + JSON.stringify(broadcastState));
     const bannerState = await window.webContents.executeJavaScript(`(async () => {
       const station = {key: 'row-layout', station: 'Row layout', mode: 'longset', accent: '#a83657', tracks: [{path: 'C:/Music/first.mp3', name: 'First'}]};
       logos[station.key] = ${JSON.stringify(path.join(__dirname, '..', 'assets', 'icons', 'radio.png'))};

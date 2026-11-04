@@ -65,6 +65,7 @@ function createTray() {
 const AUDIO = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.wav', '.flac']);
 const SIDEcars = new Set(['.lrc', '.txt']);
 const MAX_SIDECAR_BYTES = 1024 * 1024;
+const MAX_GAPLESS_AUDIO_BYTES = 64 * 1024 * 1024;
 const allowedAudio = new Set();
 let libraryRoot = '';
 function grantAudio(paths) {
@@ -371,6 +372,13 @@ handle('duration:clear', () => {
   cache().clear();
   durationReferences = '';
   return true;
+});
+handle('audio:readForGapless', async (_, audioPath) => {
+  requireGrantedAudio(audioPath);
+  const info = await fs.stat(audioPath);
+  if (!info.isFile() || info.size > MAX_GAPLESS_AUDIO_BYTES)
+    throw new Error('Recording is too large for buffered playback');
+  return fs.readFile(audioPath);
 });
 app.on('will-quit', () => {
   durationCache?.close();
