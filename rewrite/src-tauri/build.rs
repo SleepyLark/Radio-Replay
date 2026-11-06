@@ -15,6 +15,8 @@ fn main() {
         "recover_legacy_library",
         "save_station",
         "delete_station",
+        "delete_stations",
+        "open_config",
         "desktop_publish",
         "desktop_snapshot",
         "desktop_action",

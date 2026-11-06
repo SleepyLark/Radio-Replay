@@ -1,4 +1,5 @@
 import { invoke, isTauri, convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 export interface Track {
   path: string;
   name: string;
@@ -77,5 +78,22 @@ export const chooseAudio = (folder: boolean) => invoke<Track[]>('choose_audio', 
 export const chooseArtwork = () => invoke<string | null>('choose_artwork');
 export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });
 export const deleteStation = (key: string) => invoke<Config>('delete_station', { key });
+export const deleteStations = (keys: string[]) => invoke<Config>('delete_stations', { keys });
+export const openConfig = () => invoke<void>('open_config');
+export interface AudioDrop {
+  id: number;
+  tracks: Track[];
+  error: string;
+}
+export async function listenAudioDrops(
+  start: (id: number) => void,
+  finish: (drop: AudioDrop) => void,
+) {
+  const listeners = await Promise.all([
+    listen<number>('audio-drop-start', (event) => start(event.payload)),
+    listen<AudioDrop>('audio-drop', (event) => finish(event.payload)),
+  ]);
+  return () => listeners.forEach((stop) => stop());
+}
 export const artworkUrl = (path: unknown) =>
   desktop && typeof path === 'string' && path ? convertFileSrc(path) : '';

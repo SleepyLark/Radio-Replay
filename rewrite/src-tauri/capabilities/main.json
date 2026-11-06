@@ -19,6 +19,8 @@
     "allow-recover-legacy-library",
     "allow-save-station",
     "allow-delete-station",
+    "allow-delete-stations",
+    "allow-open-config",
     "allow-desktop-publish",
     "allow-desktop-snapshot",
     "allow-desktop-open-mini",

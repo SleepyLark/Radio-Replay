@@ -277,7 +277,7 @@ pub fn upsert(
                 Some("auto" | "titles" | "lyrics" | "ignore")
             ),
             "spinLogo" => value.is_boolean(),
-            "accent" | "bannerColor" => value
+            "accent" | "bannerColor" | "bannerAccent" => value
                 .as_str()
                 .map(|s| {
                     s.is_empty()
@@ -367,6 +367,47 @@ pub fn upsert(
                     .unwrap_or(true)
             });
         }
+    }
+    Ok(())
+}
+
+pub fn collect_audio(paths: &[PathBuf]) -> Result<Vec<Track>, String> {
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for path in paths {
+        let tracks = if path.is_dir() {
+            scan_folder(path)?
+        } else if audio_file(path) {
+            vec![track(path.clone())?]
+        } else {
+            continue;
+        };
+        for track in tracks {
+            if seen.insert(track.path.clone()) {
+                result.push(track);
+            }
+        }
+        if result.len() > 100_000 {
+            return Err("Too many audio files in this drop".into());
+        }
+    }
+    if result.is_empty() {
+        return Err("No supported audio files in this drop".into());
+    }
+    Ok(result)
+}
+
+pub fn remove_many(config: &mut Config, keys: &[String]) -> Result<(), String> {
+    if keys.is_empty()
+        || keys
+            .iter()
+            .any(|key| !config.custom.iter().any(|s| &s.key == key))
+    {
+        return Err("Select existing stations to remove".into());
+    }
+    let unique: HashSet<&str> = keys.iter().map(String::as_str).collect();
+    for key in unique {
+        remove(config, key)?;
     }
     Ok(())
 }
@@ -502,6 +543,47 @@ mod tests {
             tracks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             ["a", "z"]
         );
+    }
+    #[test]
+    fn dropped_audio_collects_folders_and_deduplicates_selected_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        let audio = dir.path().join("nested/song.mp3");
+        fs::write(&audio, b"fixture").unwrap();
+        let text = dir.path().join("notes.txt");
+        fs::write(&text, b"notes").unwrap();
+        let tracks = collect_audio(&[dir.path().into(), audio, text.clone()]).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].name, "song");
+        assert!(collect_audio(&[text]).is_err());
+    }
+    #[test]
+    fn bulk_removal_validates_the_entire_selection_before_mutation() {
+        let mut config = Config::default();
+        let mut first = edit();
+        first.key = "first".into();
+        upsert(
+            &mut config,
+            first,
+            &HashSet::from(["song.mp3".into()]),
+            &HashSet::new(),
+        )
+        .unwrap();
+        upsert(
+            &mut config,
+            edit(),
+            &HashSet::from(["song.mp3".into()]),
+            &HashSet::new(),
+        )
+        .unwrap();
+        config
+            .groups
+            .push(serde_json::json!({"id":"g","members":["first","new|song.mp3","other"]}));
+        assert!(remove_many(&mut config, &["first".into(), "missing".into()]).is_err());
+        assert_eq!(config.custom.len(), 2);
+        remove_many(&mut config, &["first".into(), "new".into()]).unwrap();
+        assert!(config.custom.is_empty());
+        assert_eq!(config.groups[0]["members"], serde_json::json!(["other"]));
     }
     fn edit() -> StationEdit {
         StationEdit {

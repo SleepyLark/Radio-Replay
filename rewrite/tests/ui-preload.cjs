@@ -27,6 +27,8 @@ for (const [key, station, mode] of [
 ])
   config.custom.push({ key, station, mode, tracks: [{ path: 'first.wav', name: 'First' }] });
 const calls = [];
+const settingPatches = [];
+let rejectSetting = false;
 const messages = [];
 const callbacks = new Map();
 const listeners = new Map();
@@ -48,7 +50,17 @@ let snapshot = {
 };
 contextBridge.exposeInMainWorld('isTauri', true);
 contextBridge.exposeInMainWorld('__testCalls', () => calls);
+contextBridge.exposeInMainWorld('__testSettings', () => config.settings);
+contextBridge.exposeInMainWorld('__testSettingPatches', () => settingPatches);
+contextBridge.exposeInMainWorld('__testFailSetting', () => {
+  rejectSetting = true;
+});
 contextBridge.exposeInMainWorld('__testMessages', () => messages);
+contextBridge.exposeInMainWorld('__testEmit', (event, payload) => {
+  for (const [id, args] of listeners) {
+    if (args.event === event) callbacks.get(args.handler)?.({ event, id, payload });
+  }
+});
 contextBridge.exposeInMainWorld('__TAURI_EVENT_PLUGIN_INTERNALS__', {
   unregisterListener: (_event, id) => listeners.delete(id),
 });
@@ -102,7 +114,10 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
       case 'track_details':
         return {
           tags: {
-            title: 'Embedded song',
+            title:
+              args.key === 'ambient'
+                ? 'A long late night transmission from the quiet end of the radio dial — continuous music for the road ahead'
+                : 'Embedded song',
             artist: 'Fixture artist',
             album: 'Fixture album',
             duration: 30,
@@ -128,8 +143,24 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         config.groups = config.groups.filter((g) => g.id !== args.id);
         return config;
       case 'save_settings':
+        if (rejectSetting) {
+          rejectSetting = false;
+          throw new Error('Fixture write failure');
+        }
+        settingPatches.push(args.patch);
         config.settings = { ...config.settings, ...args.patch };
         return config;
+      case 'delete_stations': {
+        const removed = new Set(args.keys);
+        config.custom = config.custom.filter((s) => !removed.has(s.key));
+        config.groups = config.groups.map((g) => ({
+          ...g,
+          members: g.members.filter(
+            (m) => ![...removed].some((k) => m === k || m.startsWith(k + '|')),
+          ),
+        }));
+        return config;
+      }
       case 'clear_metadata_cache':
         return null;
       default:

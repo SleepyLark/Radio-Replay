@@ -1,45 +1,53 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
-  import { desktop,saveSettings,clearMetadataCache,type Config } from './library';
-  import {chooseAudio} from './library';
-  import {recoverLegacyLibrary} from './library';
-  import { fadeSeconds } from './playback/timeline';
-  let {config,onsaved,oncachecleared}:{config:Config;onsaved:(config:Config)=>void;oncachecleared:()=>void}=$props();
+  import {untrack, onDestroy} from 'svelte';
+  import {desktop, saveSettings, clearMetadataCache, chooseAudio, recoverLegacyLibrary, openConfig, type Config} from './library';
+  import {fadeSeconds} from './playback/timeline';
+  let {config,onsaved,oncachecleared,onback,onerror}: {config:Config; onsaved:(config:Config)=>void; oncachecleared:()=>void; onback:()=>void; onerror:(message:string)=>void}=$props();
   const initial=untrack(()=>config.settings);
-  let category=$state('General');
-  let accent=$state(typeof initial.accent==='string'?initial.accent:'#c7f464');
+  let category=$state('General'), status=$state(''), error=$state(''), busy=$state(false);
+  let accent=$state(String(initial.accent??'#c7f464'));
   let fade=$state(fadeSeconds({key:'',station:'',tracks:[],mode:'tracks'},initial)*1000);
-  let randomNext=$state(initial.randomNext===true);let showProgress=$state(initial.showProgress!==false);let reduceMotion=$state(initial.reduceMotion===true);
-  let density=$state(initial.listDensity==='compact'?'compact':'comfortable');let busy=$state(false);let status=$state('');let error=$state('');
-  let closeToTray=$state(initial.closeToTray!==false);
-  let tuningTransition=$state(initial.tuningTransition!==false);let tuningMinMs=$state(typeof initial.tuningMinMs==='number'?initial.tuningMinMs:0);let tuningMaxMs=$state(typeof initial.tuningMaxMs==='number'?initial.tuningMaxMs:1500);let staticPath=$state(typeof initial.staticPath==='string'?initial.staticPath:'bundled');
-  async function chooseStatic(){busy=true;error='';try{const tracks=await chooseAudio(false);if(tracks[0])staticPath=tracks[0].path;}catch(e){error=String(e);}finally{busy=false;}}
-  async function recover(){busy=true;error='';try{const before=config.custom.length;const next=await recoverLegacyLibrary();onsaved(next);status=`Recovered ${next.custom.length-before} archive stations.`;}catch(e){error=String(e);}finally{busy=false;}}
-  async function save(event:SubmitEvent){event.preventDefault();busy=true;status='';error='';try{onsaved(await saveSettings({accent,crossfade:fade,randomNext,showProgress,reduceMotion,listDensity:density,closeToTray,tuningTransition,tuningMinMs,tuningMaxMs,staticPath}));status='Settings saved.';}catch(e){error=String(e);}finally{busy=false;}}
-  async function clear(){busy=true;error='';oncachecleared();try{await clearMetadataCache();status='Metadata and duration cache cleared.';}catch(e){error=String(e);}finally{busy=false;}}
+  let randomNext=$state(initial.randomNext===true), showProgress=$state(initial.showProgress!==false), reduceMotion=$state(initial.reduceMotion===true), closeToTray=$state(initial.closeToTray!==false);
+  let density=$state(initial.listDensity==='compact'?'compact':'comfortable'), layout=$state(initial.bannerLayout==='column'?'column':'row');
+  let scanlines=$state(initial.showScanlines!==false), matchBanner=$state(initial.matchBannerAccent!==false), bounceSpeed=$state(Number(initial.bounceSpeed)||25);
+  let tuningTransition=$state(initial.tuningTransition!==false), tuningMinMs=$state(Number(initial.tuningMinMs)||0), tuningMaxMs=$state(Number(initial.tuningMaxMs??1500)), staticPath=$state(initial.staticPath==='off'?'':String(initial.staticPath??'bundled'));
+  let queued:Record<string,unknown>={}, saving=false, timer:ReturnType<typeof setTimeout>|undefined;
+  function queue(patch:Record<string,unknown>){Object.assign(queued,patch);clearTimeout(timer);status='Saving…';error='';timer=setTimeout(()=>void flush(),180);}
+  async function flush(){clearTimeout(timer);if(saving||!Object.keys(queued).length)return;saving=true;const patch=queued;queued={};try{const next=await saveSettings(patch);onsaved(next);onerror('');error='';status='Saved';}catch(e){queued={...patch,...queued};error=String(e);onerror(error);status='Changes not saved';saving=false;return;}saving=false;if(Object.keys(queued).length)void flush();}
+  onDestroy(()=>{void flush();});
+  function range(){if(tuningMinMs>tuningMaxMs){error='Minimum transition cannot exceed maximum.';return;}queue({tuningMinMs,tuningMaxMs});}
+  async function chooseStatic(){busy=true;try{const tracks=await chooseAudio(false);if(tracks[0]){staticPath=tracks[0].path;queue({staticPath});}}catch(e){error=String(e);}finally{busy=false;}}
+  async function clear(){busy=true;error='';try{await clearMetadataCache();oncachecleared();status='Metadata and duration cache cleared.';}catch(e){error=String(e);}finally{busy=false;}}
+  async function recover(){busy=true;error='';try{const next=await recoverLegacyLibrary();onsaved(next);status='Archive stations recovered.';}catch(e){error=String(e);}finally{busy=false;}}
 </script>
-<section class="heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1>SETTINGS</h1><p>Set the mood. Tune the experience.</p></div></section>
-<nav class="settings-tabs" aria-label="Settings categories">{#each ['General','Appearance','Playback','Advanced'] as item}<button class:selected={category===item} aria-pressed={category===item} onclick={()=>category=item}>{item}</button>{/each}</nav>
-<form class="editor" onsubmit={save}>{#if error}<div class="error" role="alert">{error}</div>{/if}{#if status}<p role="status">{status}</p>{/if}
+
+<section id="settingsView">
+  <p class="home-kicker">PREFERENCES</p><h1>Settings</h1>
+  <nav class="settings-tabs" aria-label="Settings categories">{#each ['General','Appearance','Playback','Advanced'] as item}<button type="button" aria-pressed={category===item} onclick={()=>category=item}>{item}</button>{/each}</nav>
   <fieldset disabled={busy||!desktop}>
-    <div hidden={category!=='Appearance'}>
-    <label>Accent color<input type="color" bind:value={accent}/></label>
-    <label>Station density<select bind:value={density}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
-    <label class="check"><input type="checkbox" bind:checked={showProgress}/>Show recording progress</label>
-    <label class="check"><input type="checkbox" bind:checked={reduceMotion}/>Reduce motion</label>
-    </div>
-    <div hidden={category!=='General'}><h2>YOUR RADIO, YOUR WAY</h2><p>Keep your broadcast close, even when the window is closed.</p>
-    <label class="check"><input type="checkbox" bind:checked={closeToTray}/>Keep playing in the tray when the main window closes</label>
-    <label class="check"><input type="checkbox" bind:checked={randomNext}/>Random next station (Previous retraces history)</label>
-    </div>
-    <div hidden={category!=='Playback'}>
-    <label>Music crossfade (milliseconds)<input type="number" min="0" max="30000" step="100" bind:value={fade} required/></label>
-    <label class="check"><input type="checkbox" bind:checked={tuningTransition}/>Play tuning static between stations</label>
-    {#if tuningTransition}<label>Minimum tuning delay (milliseconds)<input type="number" min="0" max="1500" step="1" required bind:value={tuningMinMs}/></label><label>Maximum tuning delay (milliseconds)<input type="number" min="0" max="1500" step="1" required bind:value={tuningMaxMs}/></label><p>{staticPath==='bundled'?'Bundled tuning static':staticPath||'No tuning sound'}</p><div class="actions"><button class="secondary" type="button" onclick={chooseStatic}>Choose tuning sound</button><button type="button" onclick={()=>staticPath='bundled'}>Use bundled static</button></div>{/if}
-    </div>
-    <div hidden={category!=='Advanced'}><h2>LIBRARY MAINTENANCE</h2><p>Rebuild cached metadata when your audio tags change.</p><button class="secondary" type="button" onclick={clear}>Clear metadata cache</button>
-    {#if config.root}<h2>Legacy archive</h2><p>{config.root}</p><p>Recover missing station definitions from an older archive layout. Existing stations and source files stay in place.</p><button class="secondary" type="button" onclick={recover}>Recover archive stations</button>{/if}
-    </div>
-    <div class="actions editor-footer"><button class="primary">Save settings</button></div>
+    <section data-settings-panel="general" hidden={category!=='General'}><h2>Your radio, your way</h2><p>Create a Music station for shuffled songs, or a Radio broadcast for recordings that play in order. Each station can override the defaults in its editor.</p><p>↑ / ↓ tune stations · Space plays or pauses · + / − adjust volume · M mutes. Scroll over the volume meter to adjust it.</p><p>Preferences save automatically.</p><label class="checkbox-setting"><input type="checkbox" bind:checked={closeToTray} onchange={()=>queue({closeToTray})}/>Keep playing in the tray when the main window closes</label></section>
+    <section data-settings-panel="appearance" hidden={category!=='Appearance'}><h2>Appearance</h2>
+      <label>Station banner layout<select bind:value={layout} onchange={()=>queue({bannerLayout:layout})}><option value="column">Column — logo above name</option><option value="row">Row — logo left of name</option></select></label><p>Applies to every station and its editor preview.</p>
+      <label>Accent color<input type="color" bind:value={accent} oninput={()=>queue({accent})}/></label>
+      <label>Station list spacing<select bind:value={density} onchange={()=>queue({listDensity:density})}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
+      <label class="checkbox-setting"><input type="checkbox" bind:checked={scanlines} onchange={()=>queue({showScanlines:scanlines})}/>Display scanlines</label>
+      <label class="checkbox-setting"><input type="checkbox" bind:checked={reduceMotion} onchange={()=>queue({reduceMotion})}/>Reduce motion (titles and logos)</label>
+      <label class="checkbox-setting"><input type="checkbox" bind:checked={showProgress} onchange={()=>queue({showProgress})}/>Show recording progress</label>
+      <label class="checkbox-setting"><input type="checkbox" bind:checked={matchBanner} onchange={()=>queue({matchBannerAccent:matchBanner})}/>Match player accent to each station banner</label><p>The accent softly changes when you tune to a station with a banner image or color.</p>
+      <label>Long title bounce speed<input type="number" min="10" max="200" step="5" required bind:value={bounceSpeed} onchange={e=>{if(e.currentTarget.reportValidity())queue({bounceSpeed});}}/> pixels per second</label>
+    </section>
+    <section data-settings-panel="playback" hidden={category!=='Playback'}><h2>Playback</h2>
+      <label class="checkbox-setting"><input type="checkbox" bind:checked={randomNext} onchange={()=>queue({randomNext})}/>Choose a random station when pressing Next</label><p>Previous retraces station history; Next retraces forward history before choosing another random station.</p>
+      <label>Default crossfade for music stations<input type="number" min="0" max="30000" step="100" required bind:value={fade} onchange={e=>{if(e.currentTarget.reportValidity())queue({crossfade:fade});}}/> ms</label><p>Broadcasts play without a crossfade unless you set an override in Edit station. A value of 0 disables crossfade.</p>
+      <h2>Tuning sound</h2><label class="checkbox-setting"><input type="checkbox" bind:checked={tuningTransition} onchange={()=>queue({tuningTransition})}/>Play a random static transition when tuning</label>
+      <label>Minimum transition<input type="number" min="0" max="1500" step="1" required bind:value={tuningMinMs} onchange={e=>{if(e.currentTarget.reportValidity())range();}}/> ms</label>
+      <label>Maximum transition<input type="number" min="0" max="1500" step="1" required bind:value={tuningMaxMs} onchange={e=>{if(e.currentTarget.reportValidity())range();}}/> ms</label>
+      <p>{staticPath==='bundled'?'Bundled static':staticPath?staticPath.split(/[\\/]/).at(-1):'Disabled'}</p><div class="settings-actions"><button onclick={chooseStatic}>Choose audio file</button><button onclick={()=>{staticPath='bundled';queue({staticPath});}}>Use bundled</button><button onclick={()=>{staticPath='';queue({staticPath});}}>Disable</button></div>
+    </section>
+    <section data-settings-panel="advanced" hidden={category!=='Advanced'}><h2>Files and data</h2><div class="settings-actions"><button onclick={()=>openConfig().catch(e=>error=String(e))}>Open stations.json</button><button onclick={clear}>Clear metadata cache</button></div><p>Clearing cached metadata and durations frees their storage. Tracks are measured again as needed; your stations and audio files are kept.</p>
+      {#if config.root}<h2>Legacy archive</h2><p>{config.root}</p><button onclick={recover}>Recover archive stations</button>{/if}
+    </section>
   </fieldset>
-</form>
+  <p role="status" aria-live="polite">{status}</p>{#if error}<p class="error" role="alert">{error}</p><button onclick={()=>void flush()}>Retry save</button>{/if}
+  <button class="settings-back" onclick={onback}>← Back to stations</button>
+</section>

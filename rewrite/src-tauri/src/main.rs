@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod desktop;
+mod drops;
 #[cfg(feature = "native-smoke")]
 mod smoke;
 struct DataDirectory(std::path::PathBuf);
@@ -126,7 +127,7 @@ fn save_settings(
     if let Some(path) = patch
         .get("staticPath")
         .and_then(|v| v.as_str())
-        .filter(|p| !p.is_empty() && *p != "bundled")
+        .filter(|p| !p.is_empty() && *p != "bundled" && *p != "off")
     {
         let retained = config.settings.get("staticPath").and_then(|v| v.as_str()) == Some(path);
         if !library::audio_file(Path::new(path))
@@ -157,7 +158,7 @@ async fn resolve_tuning_sound(
         .settings
         .get("staticPath")
         .and_then(|v| v.as_str())
-        .filter(|p| !p.is_empty() && *p != "bundled")
+        .filter(|p| !p.is_empty() && *p != "bundled" && *p != "off")
     else {
         return Ok(None);
     };
@@ -344,17 +345,45 @@ fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config
 
 #[tauri::command]
 fn delete_station(library: State<'_, Library>, key: String) -> Result<Config, String> {
+    delete_stations(library, vec![key])
+}
+
+#[tauri::command]
+fn delete_stations(library: State<'_, Library>, keys: Vec<String>) -> Result<Config, String> {
     let store = library.0.lock().map_err(|e| e.to_string())?;
     let mut config = store.load()?;
-    library::remove(&mut config, &key)?;
+    library::remove_many(&mut config, &keys)?;
     store.save(&config)?;
-    let station_prefix = format!("{key}\0");
+    let prefixes: Vec<String> = keys.iter().map(|key| format!("{key}\0")).collect();
     library
         .3
         .lock()
         .map_err(|e| e.to_string())?
-        .retain(|key, _| !key.starts_with(&station_prefix));
+        .retain(|key, _| !prefixes.iter().any(|prefix| key.starts_with(prefix)));
     Ok(config)
+}
+
+#[tauri::command]
+fn open_config(
+    directory: State<'_, DataDirectory>,
+    library: State<'_, Library>,
+) -> Result<(), String> {
+    let path = directory.0.join("stations.json");
+    if !path.exists() {
+        let store = library.0.lock().map_err(|e| e.to_string())?;
+        store.save(&store.load()?)?;
+    }
+    #[cfg(target_os = "windows")]
+    let editor = "notepad.exe";
+    #[cfg(target_os = "macos")]
+    let editor = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let editor = "xdg-open";
+    std::process::Command::new(editor)
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -397,6 +426,8 @@ fn main() {
             recover_legacy_library,
             save_station,
             delete_station,
+            delete_stations,
+            open_config,
             desktop::desktop_publish,
             desktop::desktop_snapshot,
             desktop::desktop_action,
@@ -412,7 +443,10 @@ fn main() {
             #[cfg(not(feature = "native-smoke"))]
             let _ = (webview, payload);
         })
-        .on_window_event(desktop::on_window_event)
+        .on_window_event(|window, event| {
+            desktop::on_window_event(window, event);
+            drops::on_window_event(window, event);
+        })
         .run(tauri::generate_context!())
         .expect("Could not start Radio Replay");
 }

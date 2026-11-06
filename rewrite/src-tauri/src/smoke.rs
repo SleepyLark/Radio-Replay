@@ -155,6 +155,18 @@ pub fn native_smoke_report(
     if phase == "closeToTray" && window.label() == "main" {
         window.close().map_err(|e| e.to_string())?;
     }
+    if phase == "drop" && window.label() == "main" {
+        super::drops::on_window_event(
+            &window.as_ref().window(),
+            &tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop {
+                paths: vec![
+                    smoke.directory.join("fixture-0.wav"),
+                    smoke.directory.join("fixture-1.wav"),
+                ],
+                position: tauri::PhysicalPosition::new(0.0, 0.0),
+            }),
+        );
+    }
     if phase == "mini" && window.label() == "mini" {
         smoke.mini_done.store(true, Ordering::Relaxed);
     }

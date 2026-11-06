@@ -57,12 +57,16 @@ pub fn save_settings(config: &mut Config, patch: Map<String, Value>) -> Result<(
                 .as_f64()
                 .map(|n| n.is_finite() && (0.0..=30000.0).contains(&n))
                 .unwrap_or(false),
-            "showProgress" | "reduceMotion" | "randomNext" | "closeToTray" | "tuningTransition" => {
-                value.is_boolean()
-            }
+            "showProgress" | "reduceMotion" | "randomNext" | "closeToTray" | "tuningTransition"
+            | "showScanlines" | "matchBannerAccent" => value.is_boolean(),
             "tuningMinMs" | "tuningMaxMs" => value.as_u64().map(|n| n <= 1500).unwrap_or(false),
             "staticPath" => value.is_string(),
             "listDensity" => matches!(value.as_str(), Some("compact" | "comfortable")),
+            "bannerLayout" => matches!(value.as_str(), Some("row" | "column")),
+            "bounceSpeed" => value
+                .as_f64()
+                .map(|n| n.is_finite() && (10.0..=200.0).contains(&n))
+                .unwrap_or(false),
             _ => false,
         };
         if !valid {
@@ -127,5 +131,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.groups.len(), 1);
+    }
+    #[test]
+    fn electron_appearance_settings_validate_atomically() {
+        let mut config = Config::default();
+        save_settings(&mut config,serde_json::from_str(r#"{"bannerLayout":"column","showScanlines":false,"matchBannerAccent":true,"bounceSpeed":25}"#).unwrap()).unwrap();
+        assert_eq!(config.settings["bannerLayout"], "column");
+        assert!(save_settings(
+            &mut config,
+            serde_json::from_str(r#"{"bannerLayout":"row","bounceSpeed":0}"#).unwrap()
+        )
+        .is_err());
+        assert_eq!(config.settings["bannerLayout"], "column");
+        assert_eq!(config.settings["bounceSpeed"], 25);
     }
 }

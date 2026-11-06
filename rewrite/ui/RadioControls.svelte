@@ -1,19 +1,28 @@
 <script lang="ts">
   import type { PlaybackState } from './playback/engine';
-  let {playback, enabled, showProgress, toggle, step, mute, volume}: {playback: PlaybackState | null; enabled: boolean; showProgress: boolean; toggle: () => void; step: (direction: number) => void; mute: () => void; volume: (value: number) => void} = $props();
-  function time(seconds: number) {const n=Math.floor(Math.max(0,seconds));return `${Math.floor(n/60)}:${String(n%60).padStart(2,'0')}`;}
+  let {playback, enabled, showProgress, toggle, step, mute, volume, compact = false}: {playback: PlaybackState | null; enabled: boolean; showProgress: boolean; toggle: () => void; step: (direction: number) => void; mute: () => void; volume: (value: number) => void; compact?: boolean} = $props();
+  const id = $props.id();
+  const level = $derived(playback?.muted ? 0 : playback?.volume ?? .8);
+  function time(seconds: number) {const n=Math.floor(Math.max(0,seconds));return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;}
+  function wheel(event: WheelEvent) {
+    event.preventDefault(); event.stopPropagation();
+    if (event.deltaY) volume((playback?.volume ?? .8) + (event.deltaY < 0 ? .05 : -.05));
+  }
 </script>
 
-<div class="radio-controls">
-  <div class="transport">
-    <button aria-label="Previous station" disabled={!enabled} onclick={()=>step(-1)}>⏮</button>
-    <button class="play-button" aria-label={playback?.playing?'Pause':'Play'} disabled={!playback?.key || playback.loading} onclick={toggle}>{playback?.playing?'Ⅱ':'▶'}</button>
-    <button aria-label="Next station" disabled={!enabled} onclick={()=>step(1)}>⏭</button>
+<section class="controls radio-controls" class:compact-controls={compact} aria-label={compact?'Now playing controls':'Radio controls'}>
+  <div class="transport-buttons transport">
+    <button aria-label="Previous station" disabled={!enabled} onclick={()=>step(-1)}>◀◀</button>
+    <button class="play play-button" aria-label={playback?.playing?'Pause':'Play'} disabled={!playback?.key || playback.loading} onclick={toggle}>{playback?.playing?'Ⅱ':'▶'}</button>
+    <button aria-label="Next station" disabled={!enabled} onclick={()=>step(1)}>▶▶</button>
   </div>
-  <div class="volume">
-    <button aria-label={playback?.muted?'Unmute':'Mute'} onclick={mute}>{playback?.muted?'⊘':'◖'}</button>
-    <input aria-label="Volume" type="range" min="0" max="1" step=".01" value={playback?.muted?0:playback?.volume??.8} oninput={e=>volume(Number(e.currentTarget.value))}/>
-    <span>{Math.round((playback?.muted?0:playback?.volume??.8)*100)}%</span>
+  {#if showProgress}<div class="recording-timeline progress"><output aria-label="Playback time">{time(playback?.seconds??0)} / {time(playback?.duration??0)}</output><progress aria-label="Recording progress" max="1" value={playback?.duration?playback.seconds/playback.duration:0}></progress></div>{/if}
+  <div class="volume-module volume" title="Volume: + / − · M to mute · Scroll to adjust" onwheel={wheel}>
+    <button class="mute-button" aria-label={playback?.muted?'Unmute':'Mute'} aria-pressed={playback?.muted??false} data-silent={level===0} onclick={mute}>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4Z"/>{#if level===0}<path d="m16 9 6 6m0-6-6 6"/>{:else}<path d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/>{/if}</svg>
+    </button>
+    <label for={id}>VOL</label>
+    <div class="volume-meter"><div class="volume-segments" aria-hidden="true">{#each Array(12) as _, index}<i class:lit={index < Math.round(level*12)} style:height={`${8+index*1.4}px`}></i>{/each}</div><input id={id} class="volume-input" aria-label="Volume" type="range" min="0" max="1" step=".01" value={level} oninput={e=>volume(Number(e.currentTarget.value))}/></div>
+    <output class="volume-value" for={id}>{Math.round(level*100)}%</output>
   </div>
-  {#if showProgress}<div class="progress"><span>{time(playback?.seconds??0)}</span><progress aria-label="Recording progress" max="1" value={playback?.duration?playback.seconds/playback.duration:0}></progress><span>{time(playback?.duration??0)}</span></div>{/if}
-</div>
+</section>

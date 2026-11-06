@@ -219,3 +219,41 @@ saving without interrupted audio, and layout at 760×560. It saves `out/ui-home.
 checks the bundled fonts, restored image assets and actual Rust station save.
 This is a UX parity pass; automatic banner color sampling and all original
 appearance preferences are not yet exposed.
+
+## Preview 0.3: original Electron UI and interaction patterns
+
+This supersedes the 0.2 visual approximation. The UI imports the original Electron
+stylesheets, in their original order, and uses the original classes and screen
+structure. Those styles are bundled by Vite; no Electron runtime ships. Rust
+continues to handle the library, file grants, metadata and desktop integration.
+
+- Restores the original sidebar widths, grouped station list, group + / edit
+  controls, centered home/player layout, radio dial, frequency number, on-air
+  block, inline synchronized lyric, transport and segmented volume meter.
+- Keeps the requested bottom now-playing bar visible on every main-app screen.
+  Its controls and the separate mini window share the main playback engine.
+- Restores group create/edit dialogs and station-manager select-all, individual
+  editing, and confirmed bulk removal. Bulk removal validates the entire selection
+  and saves once; it never removes source media.
+- Station editor uses the original dialog sizing, fixed header/footer, preview,
+  playback presets and collapsible Essentials / Appearance / Advanced sections.
+  Audio is grouped by folder with ordering and folder removal in the draft.
+- Native audio drops accept files/folders, deduplicate audio and open/append to
+  the station draft. Rust grants only OS-dropped files. Folder scans run on a worker
+  thread. A result arriving after its editor was cancelled is ignored.
+- Preferences save automatically with debounced, serialized patches, visible
+  failure/retry, and a flush on leaving Settings. Restores banner row/column layout,
+  scanlines, banner accent matching, sampled image accents, title bounce speed,
+  reduced motion, volume-wheel adjustment and opening stations.json.
+- Retains exact imported station accent priority and 3D logo rotation from Electron.
+
+UI tests cover automatic-save failure/retry, group dialogs, confirmed bulk removal,
+native-drop event delivery/cancellation, title motion/reduced motion, volume-wheel
+behavior, and the persistent footer at the minimum window size. Native Windows
+smoke additionally exercises the real Rust drop-grant pipeline using a simulated
+window drop event, station creation/removal while another station plays, and the
+existing artwork/font/playback/mini/tray integration checks.
+
+Windows is the validated platform. Linux/macOS still need target-platform checks;
+WebView font rasterization and window decorations may differ. Native OS file-picker
+appearance is platform controlled. These do not prevent copying the Electron UI.

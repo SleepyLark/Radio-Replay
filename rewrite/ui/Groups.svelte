@@ -1,23 +1,28 @@
 <script lang="ts">
-  import { desktop, saveGroup, deleteGroup, type Config, type Group } from './library';
-  let {config,onsaved}:{config:Config;onsaved:(config:Config)=>void}=$props();
-  let id=$state(''); let name=$state(''); let members=$state<string[]>([]); let busy=$state(false); let error=$state(''); let deleting=$state(false);
-  const groups=$derived(config.groups.filter(g=>g && typeof g.id==='string' && typeof g.name==='string' && Array.isArray(g.members)));
-  function edit(group?:Group) {id=group?.id??'';name=group?.name??'';members=[...(group?.members??[])];deleting=false;error='';}
-  function toggle(key:string) {members=members.includes(key)?members.filter(m=>m!==key):[...members,key];}
-  async function perform(action:()=>Promise<Config>) {busy=true;error='';try{onsaved(await action());edit();}catch(e){error=String(e);}finally{busy=false;}}
+  import {untrack} from 'svelte';
+  import Dialog from './Dialog.svelte';
+  import {saveGroup, deleteGroup, type Config, type Group} from './library';
+  let {config,group,onsaved,oncancel}: {config: Config; group: Group|null; onsaved: (config:Config,id:string)=>void; oncancel:()=>void} = $props();
+  const initial=untrack(()=>group);
+  const id=initial?.id??crypto.randomUUID();
+  let name=$state(initial?.name??'');
+  let members=$state<string[]>([...(initial?.members??[])]);
+  let busy=$state(false), error=$state(''), deleting=$state(false);
+  function toggle(key:string){members=members.includes(key)?members.filter(m=>m!==key):[...members,key];}
+  async function save(){busy=true;error='';try{onsaved(await saveGroup($state.snapshot({id,name,members})),id);}catch(e){error=String(e);}finally{busy=false;}}
+  async function remove(){busy=true;error='';try{onsaved(await deleteGroup(id),'all');}catch(e){error=String(e);}finally{busy=false;}}
 </script>
-<section class="heading"><div><h1>Your groups</h1><p>Build a lineup from stations or individual music tracks.</p></div><button class="secondary" onclick={()=>edit()} disabled={busy}>New group</button></section>
-<div class="actions">{#each groups as group}<button class="secondary" onclick={()=>edit(group)} disabled={busy}>{group.name}</button>{/each}</div>
-<form class="editor" onsubmit={event=>{event.preventDefault();void perform(()=>saveGroup($state.snapshot({id:id||crypto.randomUUID(),name,members})));}}>
-  <h2>{id?'Edit group':'Create group'}</h2>
-  {#if error}<div class="error" role="alert">{error}</div>{/if}
-  <fieldset disabled={busy||!desktop}>
+
+<Dialog title={initial?'Edit group':'Create group'} {oncancel} {busy} onsubmit={()=>void save()}>
+  <fieldset disabled={busy}>
     <label>Group name<input required maxlength="200" bind:value={name}/></label>
-    {#each config.custom as station}<details><summary><label class="check"><input type="checkbox" checked={members.includes(station.key)} onchange={()=>toggle(station.key)}/>{station.station}</label></summary>
-      {#if station.mode==='tracks'}{#each station.tracks as track}<label class="check track-choice"><input type="checkbox" checked={members.includes(`${station.key}|${track.path}`)} onchange={()=>toggle(`${station.key}|${track.path}`)}/>{track.name}</label>{/each}{/if}
-    </details>{/each}
-    <div class="actions editor-footer"><button class="primary" disabled={!name.trim()}>Save group</button>{#if id}<button class="danger" type="button" onclick={()=>deleting=true}>Delete group</button>{/if}</div>
-    {#if deleting}<div class="notice"><p>Delete this group? Stations and media files stay in your library.</p><button class="danger" type="button" onclick={()=>perform(()=>deleteGroup(id))}>Confirm delete</button><button type="button" onclick={()=>deleting=false}>Keep group</button></div>{/if}
+    <p>Choose stations or individual tracks:</p>
+    <div class="member-list">{#each config.custom as station}<details><summary><label><input type="checkbox" checked={members.includes(station.key)} onchange={()=>toggle(station.key)}/>{station.game?`${station.game} / `:''}{station.station}</label></summary>
+      {#if station.mode==='tracks'}{#each station.tracks as track}<label class="track-choice"><input type="checkbox" checked={members.includes(`${station.key}|${track.path}`)} onchange={()=>toggle(`${station.key}|${track.path}`)}/>{track.name}</label>{/each}{/if}
+    </details>{/each}</div>
+    {#if initial}<button type="button" class="danger" onclick={()=>deleting=true}>Delete group</button>{/if}
+    {#if deleting}<div class="notice"><p>Delete this group? Stations and audio files stay in your library.</p><button type="button" class="danger" onclick={remove}>Confirm delete</button></div>{/if}
   </fieldset>
-</form>
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#snippet footer()}<button type="button" onclick={oncancel} disabled={busy}>Cancel</button><button class="primary" disabled={busy||!name.trim()}>Save group</button>{/snippet}
+</Dialog>

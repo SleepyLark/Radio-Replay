@@ -66,7 +66,7 @@ void (async () => {
       );
       await until(
         () =>
-          ['.banner-image', '.station-logo img'].every(
+          ['#dialBanner', '#logo'].every(
             (selector) => document.querySelector(selector)?.naturalWidth > 0,
           ),
         'Saved banner or logo asset was not granted',
@@ -81,6 +81,44 @@ void (async () => {
       document.querySelector('dialog button[type="submit"]').click();
       await until(() => !document.querySelector('dialog'), 'Native station save did not complete');
       assert(document.querySelector('[aria-label="Pause"]'), 'Visual save stopped native audio');
+      await invoke('native_smoke_report', {
+        phase: 'drop',
+        ok: true,
+        message: 'Testing native drop grants and editor flow',
+      });
+      await until(() => document.querySelector('dialog')?.open, 'Native drop did not open editor');
+      await until(
+        () => document.querySelectorAll('.file-row').length === 2,
+        'Dropped native audio files missing',
+      );
+      const droppedName = document.querySelector('dialog input');
+      droppedName.value = 'Native Dropped';
+      droppedName.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(30);
+      document.querySelector('dialog button[type="submit"]').click();
+      await until(
+        () => !document.querySelector('dialog'),
+        'Native drop grants did not allow saving',
+      );
+      assert(
+        document.querySelector('[aria-label="Pause"]'),
+        'Saving another station stopped playback',
+      );
+      document.querySelector('.choose.secondary').click();
+      await until(() => document.querySelector('dialog')?.open, 'Native station manager failed');
+      const row = [...document.querySelectorAll('.bulk-row')].find((e) =>
+        e.textContent.includes('Native Dropped'),
+      );
+      row.querySelector('input').click();
+      await wait(30);
+      document.querySelector('dialog .danger').click();
+      await wait(30);
+      document.querySelector('dialog .danger').click();
+      await until(() => !document.querySelector('dialog'), 'Native bulk removal failed');
+      assert(
+        document.querySelector('[aria-label="Pause"]'),
+        'Removing another station stopped playback',
+      );
       await wait(300);
       const snapshot = await invoke('desktop_snapshot');
       assert(
