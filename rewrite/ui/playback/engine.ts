@@ -1,5 +1,6 @@
 import type { PlayableTrack, Station } from '../library';
 import { clockFor, fadeSeconds, position, shuffle, type Clock } from './timeline.ts';
+import { tuningMilliseconds } from './tuning.ts';
 
 export interface PlaybackState {
   key: string;
@@ -35,6 +36,7 @@ export interface PlaybackOptions {
   url: (path: string) => string;
   onState: (state: PlaybackState) => void;
   rememberDuration?: (key: string, track: PlayableTrack, duration: number) => Promise<void>;
+  tuningSource?: (value: unknown) => Promise<string | null>;
   audio?: () => HTMLAudioElement;
   context?: () => AudioContext;
   fetchBytes?: (url: string, signal: AbortSignal) => Promise<ArrayBuffer>;
@@ -76,6 +78,7 @@ export class Playback {
     index: number;
   } | null = null;
   private advancing = false;
+  private noise: HTMLAudioElement | null = null;
   private timer: ReturnType<typeof setInterval>;
   constructor(options: PlaybackOptions) {
     this.options = options;
@@ -108,6 +111,10 @@ export class Playback {
     element.load();
   }
   private stopSources() {
+    if (this.noise) {
+      this.release(this.noise);
+      this.noise = null;
+    }
     this.fading = null;
     this.release(this.current);
     this.release(this.spare);
@@ -164,6 +171,7 @@ export class Playback {
     this.applyVolume();
   }
   private applyVolume() {
+    if (this.noise) this.noise.volume = this.level();
     if (this.buffered) this.buffered.gain.gain.value = this.level();
     if (!this.fading) {
       this.current.volume = this.level();
@@ -215,11 +223,53 @@ export class Playback {
       this.release(element);
     }
   }
+  private async beginTuning(settings: Record<string, unknown>, token: number, signal: AbortSignal) {
+    if (!this.options.tuningSource) return;
+    const ms = tuningMilliseconds(settings, this.random);
+    if (!ms) return;
+    let done = false;
+    const owner: { audio: HTMLAudioElement | null } = { audio: null };
+    void this.options
+      .tuningSource(settings.staticPath)
+      .then((source) => {
+        if (!source || done || token !== this.token || signal.aborted || !this.wantPlay) return;
+        const sound = (this.options.audio ?? (() => new Audio()))();
+        owner.audio = sound;
+        this.noise = sound;
+        sound.loop = true;
+        sound.src = source;
+        sound.volume = this.level();
+        void sound.play().catch(() => {});
+      })
+      .catch(() => {});
+    try {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        const finish = () => {
+          clearTimeout(timeout);
+          signal.removeEventListener('abort', finish);
+          resolve();
+        };
+        const timeout = setTimeout(finish, ms);
+        signal.addEventListener('abort', finish, { once: true });
+      });
+    } finally {
+      done = true;
+      if (owner.audio) {
+        this.release(owner.audio);
+        if (this.noise === owner.audio) this.noise = null;
+      }
+    }
+  }
   async tune(station: Station, settings: Record<string, unknown> = {}, context = 'all') {
     this.stop();
     const token = this.token;
     const signal = this.controller.signal;
     this.wantPlay = true;
+    const transition = this.beginTuning(settings, token, signal);
     this.emit({
       key: station.key,
       station: station.station,
@@ -281,6 +331,8 @@ export class Playback {
         this.clocks.delete(key);
         retained -= value.clock.order.length;
       }
+      await transition;
+      if (token !== this.token) return;
       const at = position(clock, this.now());
       this.index = at.index;
       const skipped = station.tracks.length - playable.length;
@@ -391,6 +443,7 @@ export class Playback {
     const token = this.token;
     const buffered = this.buffered;
     this.wantPlay = false;
+    this.noise?.pause();
     this.current.pause();
     this.spare.pause();
     this.emit({ playing: false });

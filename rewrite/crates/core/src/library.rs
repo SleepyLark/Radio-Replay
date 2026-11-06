@@ -143,6 +143,16 @@ pub fn scan_folder(root: &Path) -> Result<Vec<Track>, String> {
                 continue;
             }
             if metadata.is_dir() {
+                if matches!(
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "extra" | "extras"
+                ) {
+                    continue;
+                }
                 visit(&entry.path(), depth + 1, output)?;
             } else if metadata.is_file() && audio_file(&entry.path()) {
                 if output.len() >= 50_000 {
@@ -156,6 +166,74 @@ pub fn scan_folder(root: &Path) -> Result<Vec<Track>, String> {
     let mut tracks = Vec::new();
     visit(root, 0, &mut tracks)?;
     Ok(tracks)
+}
+
+/// Recover archive-era definitions without moving audio or overwriting existing stations.
+pub fn recover_legacy(config: &mut Config) -> Result<usize, String> {
+    if config.root.is_empty() {
+        return Err("This configuration has no legacy archive root".into());
+    }
+    let original = PathBuf::from(&config.root);
+    let root = fs::canonicalize(&original).map_err(|e| e.to_string())?;
+    let tracks = scan_folder(&root)?;
+    let mut stations: std::collections::BTreeMap<String, Station> = Default::default();
+    for mut track in tracks {
+        let relative = Path::new(&track.path)
+            .strip_prefix(&root)
+            .map_err(|e| e.to_string())?;
+        let parts: Vec<_> = relative
+            .components()
+            .map(|p| p.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let game = if parts.len() > 1 {
+            parts[0].clone()
+        } else {
+            "Library".into()
+        };
+        let station = if parts.len() > 2 {
+            parts[parts.len() - 2].clone()
+        } else {
+            track.name.clone()
+        };
+        let key = format!("{game}::{station}");
+        track.path = original.join(relative).to_string_lossy().into_owned();
+        #[cfg(windows)]
+        {
+            track.path = track.path.replace('/', "\\");
+        }
+        let entry = stations.entry(key.clone()).or_insert_with(|| {
+            let mut extra = serde_json::Map::new();
+            extra.insert("game".into(), game.into());
+            extra.insert("custom".into(), true.into());
+            extra.insert("legacyRoot".into(), config.root.clone().into());
+            Station {
+                key,
+                station,
+                tracks: vec![],
+                extra,
+            }
+        });
+        entry.tracks.push(track);
+    }
+    let existing: HashSet<String> = config.custom.iter().map(|s| s.key.clone()).collect();
+    let mut added = 0;
+    for (key, mut station) in stations {
+        if existing.contains(&key) {
+            continue;
+        }
+        station.extra.insert(
+            "mode".into(),
+            if station.tracks.len() == 1 {
+                "longset"
+            } else {
+                "tracks"
+            }
+            .into(),
+        );
+        config.custom.push(station);
+        added += 1;
+    }
+    Ok(added)
 }
 
 #[derive(Deserialize)]
@@ -300,6 +378,64 @@ pub fn remove(config: &mut Config, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovers_legacy_layout_without_overwriting_custom_stations_or_references() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Game/Station")).unwrap();
+        std::fs::create_dir_all(dir.path().join("Game/Extras")).unwrap();
+        for file in [
+            "Game/Station/a.mp3",
+            "Game/Station/b.mp3",
+            "Game/Broadcast.mp3",
+            "Game/Extras/skip.mp3",
+        ] {
+            std::fs::write(dir.path().join(file), b"fixture").unwrap();
+        }
+        let mut config = Config::default();
+        config.root = dir.path().to_string_lossy().into_owned();
+        let member = format!(
+            "Game::Station|{}",
+            dir.path()
+                .join("Game")
+                .join("Station")
+                .join("a.mp3")
+                .display()
+        );
+        config
+            .groups
+            .push(serde_json::json!({"members":[member.clone()]}));
+        assert_eq!(recover_legacy(&mut config).unwrap(), 2);
+        assert_eq!(
+            config
+                .custom
+                .iter()
+                .find(|s| s.key == "Game::Station")
+                .unwrap()
+                .tracks
+                .len(),
+            2
+        );
+        assert_eq!(
+            config
+                .custom
+                .iter()
+                .find(|s| s.key == "Game::Broadcast")
+                .unwrap()
+                .extra["mode"],
+            "longset"
+        );
+        assert_eq!(config.groups[0]["members"][0], member);
+        config.groups[0]["id"] = "archive-group".into();
+        assert_eq!(
+            playback_files_for_group(config.clone(), "Game::Station", Some("archive-group"))
+                .unwrap()
+                .len(),
+            1
+        );
+        config.custom[0].station = "Edited".into();
+        assert_eq!(recover_legacy(&mut config).unwrap(), 0);
+        assert_eq!(config.custom[0].station, "Edited");
+    }
     #[test]
     fn playback_resolves_only_saved_audio_and_skips_missing_files() {
         let dir = tempfile::tempdir().unwrap();

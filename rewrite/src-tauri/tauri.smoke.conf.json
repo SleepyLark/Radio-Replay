@@ -1,0 +1,25 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Radio Replay Native Smoke",
+        "width": 1200,
+        "height": 800,
+        "visible": false,
+        "additionalBrowserArgs": "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "main-window",
+        "mini-player",
+        {
+          "identifier": "native-smoke",
+          "windows": ["main", "mini"],
+          "permissions": ["allow-native-smoke-report"]
+        }
+      ]
+    }
+  }
+}

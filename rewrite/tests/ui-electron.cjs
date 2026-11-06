@@ -100,6 +100,28 @@ app
         (await window.webContents.capturePage()).toPNG(),
       );
       console.log(result);
+      window.setContentSize(480, 160);
+      await window.loadURL(`http://127.0.0.1:${server.address().port}/index.html?mini=1`);
+      console.log(
+        await window.webContents.executeJavaScript(
+          `(async()=>{
+        const wait=ms=>new Promise(r=>setTimeout(r,ms));const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+        for(let i=0;i<100&&!document.querySelector('.mini-titles strong')?.textContent.includes('Fixture Radio');i++)await wait(50);
+        assert(document.querySelector('.mini-titles strong')?.textContent==='Fixture Radio','Mini snapshot not displayed');
+        assert(!window.__testCalls().includes('load_config')&&!window.__testCalls().includes('prepare_station'),'Mini started another library or audio engine');
+        document.querySelector('[aria-label="Pause"]').click();document.querySelector('[aria-label="Next station"]').click();
+        const volume=document.querySelector('input[type="range"]');volume.value='.4';volume.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[aria-label="Restore main window"]').click();await wait(100);
+        const commands=window.__testMessages();assert(commands.some(c=>c.type==='toggle')&&commands.some(c=>c.type==='next')&&commands.some(c=>c.type==='volume'&&c.value===.4),'Mini commands not forwarded');assert(window.__testCalls().includes('desktop_restore'),'Restore not requested');
+        assert(document.querySelector('.mini-player').getBoundingClientRect().height<=innerHeight,'Mini overflows viewport');
+        return 'Mini UI smoke passed: snapshot display, control forwarding, volume, restore, and no duplicate audio engine.';
+      })()`,
+          true,
+        ),
+      );
+      fs.writeFileSync(
+        path.join(output, 'phase5-mini.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
       clearTimeout(timeout);
       window.destroy();
       server.close();

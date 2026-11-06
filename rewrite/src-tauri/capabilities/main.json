@@ -2,5 +2,27 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "allow-load-config",
+    "allow-import-config",
+    "allow-choose-audio",
+    "allow-choose-artwork",
+    "allow-prepare-station",
+    "allow-track-details",
+    "allow-remember-duration",
+    "allow-clear-metadata-cache",
+    "allow-save-group",
+    "allow-delete-group",
+    "allow-save-settings",
+    "allow-resolve-tuning-sound",
+    "allow-recover-legacy-library",
+    "allow-save-station",
+    "allow-delete-station",
+    "allow-desktop-publish",
+    "allow-desktop-snapshot",
+    "allow-desktop-open-mini",
+    "allow-desktop-restore",
+    "allow-desktop-quit"
+  ]
 }

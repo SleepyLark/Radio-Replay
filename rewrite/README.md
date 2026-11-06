@@ -36,9 +36,9 @@ npm run desktop
   directory. Import copies configuration without modifying Electron's source file.
 - Create, rename and delete custom stations; add files or recursively scan a selected
   folder, remove/reorder tracks, choose music or broadcast mode and select artwork.
-  Deletion removes group references but never deletes source media. Root-library
-  reconstruction from legacy `root`, tuning-static effects, remaining visual options,
-  tray, media keys and mini player remain subsequent milestones.
+  Deletion removes group references but never deletes source media. Imported archive
+  roots can be recovered explicitly from Settings. Remaining station visual options
+  (banners, automatic artwork accents and logo motion) are still pending parity work.
 - Existing numeric crossfade values are preserved as-is. Convert their units at
   the playback boundary once, rather than during every configuration load.
 - The renderer has no general filesystem/shell capability. Rust grants exact selected
@@ -48,7 +48,8 @@ npm run desktop
   saved station key; the renderer cannot request an arbitrary audio path.
 - Folder scans run off the UI thread, use deterministic filename order, skip symlinks
   and Windows reparse points, and fail visibly on unreadable directories or scan limits
-  (64 levels / 50,000 audio files). Supported formats match Electron.
+  (64 levels / 50,000 audio files). Extra/Extras directories are skipped, matching
+  Electron. Supported formats match Electron.
 
 ## Migration sequence
 
@@ -83,9 +84,12 @@ to streaming. Future decode failures drain scheduled audio before streaming cont
 Metadata probes run with at most six concurrent elements and cache duration by path,
 size and modification time in memory. Missing or unsupported tracks are skipped, with
 a visible notice. Rapid tuning cancels stale probes and clears old playback sources.
-Webview codec support remains platform-dependent. Tuning static/delay effects remain
-pending. Previous/next follow the selected group's lineup, with optional random
+Webview codec support remains platform-dependent. Previous/next follow the selected group's lineup, with optional random
 selection and bounded backward/forward history.
+
+Tuning transitions support bundled static or a selected audio file, with configurable
+minimum/maximum delay (0–1500 ms). They honor mute/volume, stop on cancellation, and
+cannot restart after a later tune. Missing static audio never blocks station playback.
 
 ## Phase 4 library features
 
@@ -117,6 +121,58 @@ isolated mock backend and silent WAV fixture: tag/lyric display, one details req
 per track, accent application, group editing/filtering, settings and cache clearing.
 It saves `out/phase4-ui.png` for layout inspection. Run it with the same Electron
 test-host command below, replacing `audio-electron.cjs` with `ui-electron.cjs`.
+
+## Phase 5 desktop preview
+
+- The tray offers restore, mini player, play/pause, previous/next station and Quit.
+  Closing the main window keeps playing by default; disable this in Settings to
+  exit on close. If tray creation fails, closing exits rather than leaving an
+  inaccessible background process.
+- Windows SMTC, Linux MPRIS and macOS media integration use Souvlaki. Native actions
+  route to the same main playback engine; metadata and progress are updated from
+  its state. OS seeking is intentionally ignored, matching read-only recording progress.
+- Mini player is a separate 480×160 always-on-top window with snapshot updates,
+  controls and volume. Drag its header to move it. Escape, its restore button, or
+  closing the mini window returns to the main player. Its last position is saved
+  and restored only if it still fits a monitor work area. It never owns audio.
+- Main and mini windows have separate command capabilities: the mini cannot edit
+  the library, select files or publish playback state. Window labels are also checked
+  by the desktop command handlers. WebView2 browser options are inherited from the
+  main window to prevent shared-profile environment mismatches.
+- Settings can recover archive-era `Game/Station.mp3` and `Game/Station/track.mp3`
+  layouts from an imported `root`. Recovery adds missing definitions only; it never
+  overwrites edited stations or moves source files. Original keys and paths preserve
+  group/artwork references. The scan runs without locking configuration for its duration.
+
+Build the Windows preview with `npm run package` (or `npm exec tauri -- build --bundles nsis`).
+The optimized executable is `target/release/radio-replay-desktop.exe`; the current-user
+NSIS installer is under `target/release/bundle/nsis/`. These are unsigned preview builds.
+They use the system WebView2 runtime; the installer can install that runtime if needed.
+No Electron runtime is included. The Windows installer has not been installed automatically.
+
+CI now configures Windows, Ubuntu and macOS compile/test jobs; a manual workflow run
+also builds and uploads the Windows executable and installer. Linux/macOS jobs and
+hardware media-key behavior still need validation on their target environments.
+
+### Native Windows integration smoke
+
+An opt-in `native-smoke` Cargo feature runs real Tauri/WebView2 windows, not an Electron
+mock. It creates silent WAVs, sidecars and a separate fixture configuration; checks
+asset playback, close-to-tray, mini controls, permission denial, tray creation and
+native media-control initialization; writes `report.json`; and exits with a test result.
+The harness and its test IPC handler are excluded from normal builds.
+
+From `rewrite` in PowerShell:
+
+```powershell
+npm exec tauri -- build --debug --no-bundle --features native-smoke --config src-tauri/tauri.smoke.conf.json
+$env:RADIO_REPLAY_NATIVE_SMOKE_DIR = Join-Path (Get-Location) 'out/native-smoke'
+& .\target\debug\radio-replay-desktop.exe
+```
+
+The directory must be absolute and named `native-smoke`. Fixtures and the report
+remain there for inspection. Browser smoke tests also verify mini rendering/control
+forwarding and save `out/phase5-mini.png`.
 
 `tests/audio-electron.cjs` additionally exercises the engine using real Chromium
 Audio and AudioContext with generated silent WAVs. It uses the original checkout's

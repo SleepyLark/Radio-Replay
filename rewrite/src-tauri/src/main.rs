@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod desktop;
+#[cfg(feature = "native-smoke")]
+mod smoke;
+struct DataDirectory(std::path::PathBuf);
 use radio_replay_core::{
     library::{self, StationEdit},
     Track,
@@ -94,12 +98,43 @@ fn delete_group(library: State<'_, Library>, id: String) -> Result<Config, Strin
     Ok(config)
 }
 #[tauri::command]
+async fn recover_legacy_library(library: State<'_, Library>) -> Result<Config, String> {
+    let baseline = library.0.lock().map_err(|e| e.to_string())?.load()?;
+    let existing: HashSet<String> = baseline.custom.iter().map(|s| s.key.clone()).collect();
+    let mut recovered = baseline.clone();
+    library::recover_legacy(&mut recovered)?;
+    let store = library.0.lock().map_err(|e| e.to_string())?;
+    let mut config = store.load()?;
+    if config.root != baseline.root {
+        return Err("Archive root changed during recovery; retry with the current library".into());
+    }
+    for station in recovered.custom {
+        if !existing.contains(&station.key) && !config.custom.iter().any(|s| s.key == station.key) {
+            config.custom.push(station);
+        }
+    }
+    store.save(&config)?;
+    Ok(config)
+}
+#[tauri::command]
 fn save_settings(
     library: State<'_, Library>,
     patch: serde_json::Map<String, serde_json::Value>,
 ) -> Result<Config, String> {
     let store = library.0.lock().map_err(|e| e.to_string())?;
     let mut config = store.load()?;
+    if let Some(path) = patch
+        .get("staticPath")
+        .and_then(|v| v.as_str())
+        .filter(|p| !p.is_empty() && *p != "bundled")
+    {
+        let retained = config.settings.get("staticPath").and_then(|v| v.as_str()) == Some(path);
+        if !library::audio_file(Path::new(path))
+            || (!retained && !library.1.lock().map_err(|e| e.to_string())?.contains(path))
+        {
+            return Err("Tuning audio was not selected".into());
+        }
+    }
     preferences::save_settings(&mut config, patch)?;
     store.save(&config)?;
     Ok(config)
@@ -111,6 +146,34 @@ struct Library(
     Mutex<HashSet<String>>,
     Mutex<HashMap<String, library::PlayableTrack>>,
 );
+
+#[tauri::command]
+async fn resolve_tuning_sound(
+    app: tauri::AppHandle,
+    library: State<'_, Library>,
+) -> Result<Option<String>, String> {
+    let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+    let Some(path) = config
+        .settings
+        .get("staticPath")
+        .and_then(|v| v.as_str())
+        .filter(|p| !p.is_empty() && *p != "bundled")
+    else {
+        return Ok(None);
+    };
+    if !library::audio_file(Path::new(path)) {
+        return Err("Invalid tuning audio".into());
+    }
+    let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() > 64 * 1024 * 1024 {
+        return Err("Tuning audio exceeds 64 MiB".into());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
 
 fn allow_art(app: &tauri::AppHandle, config: &Config) {
     for path in config.logos.values().filter_map(|v| v.as_str()) {
@@ -270,7 +333,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let path = app.path().app_data_dir()?.join("stations.json");
+            let directory = app.path().app_data_dir()?;
+            #[cfg(feature = "native-smoke")]
+            let directory = smoke::initialize(app.handle())?.unwrap_or(directory);
+            app.manage(DataDirectory(directory.clone()));
+            let path = directory.join("stations.json");
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -283,6 +350,7 @@ fn main() {
                 Mutex::default(),
                 Mutex::default(),
             ));
+            desktop::setup(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -297,9 +365,26 @@ fn main() {
             save_group,
             delete_group,
             save_settings,
+            resolve_tuning_sound,
+            recover_legacy_library,
             save_station,
-            delete_station
+            delete_station,
+            desktop::desktop_publish,
+            desktop::desktop_snapshot,
+            desktop::desktop_action,
+            desktop::desktop_open_mini,
+            desktop::desktop_restore,
+            desktop::desktop_quit,
+            #[cfg(feature = "native-smoke")]
+            smoke::native_smoke_report
         ])
+        .on_page_load(|webview, payload| {
+            #[cfg(feature = "native-smoke")]
+            smoke::page_loaded(webview, payload);
+            #[cfg(not(feature = "native-smoke"))]
+            let _ = (webview, payload);
+        })
+        .on_window_event(desktop::on_window_event)
         .run(tauri::generate_context!())
         .expect("Could not start Radio Replay");
 }

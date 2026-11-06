@@ -6,6 +6,9 @@
   import { groupLineup,parseTimedText,currentLine,StationHistory } from './playback/text';
   import { Playback, type PlaybackState } from './playback/engine';
   import StationEditor from './StationEditor.svelte';
+  import {listenDesktop,publishDesktop,openMini,quitDesktop,type DesktopAction,type DesktopSnapshot} from './desktop';
+  import {resolveTuningSound} from './library';
+  import bundledStatic from '../../assets/audio/static.mp3?url';
   let config = $state(emptyConfig());
   let query = $state('');
   let active = $state<Station | null>(null);
@@ -44,6 +47,9 @@
     tune(lineup[(Math.max(0,index) + direction + lineup.length) % lineup.length]);
   }
   function toggle() { if(playback?.playing) void player?.pause(); else void player?.play(); }
+  function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
+  async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
+  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playback?.station??'',title:textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),accent:typeof config.settings.accent==='string'?config.settings.accent:'#c7f464',playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};return publishDesktop(snapshot);}
   function time(seconds: number) { const n = Math.floor(Math.max(0,seconds)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2,'0')}`; }
   function edit(station: Station | null) { editTarget = station; editing = true; }
   function saved(next: Config) { player?.invalidate();history=new StationHistory(); config = next; active = next.custom.find(s => s.key === active?.key) ?? null; editing = false;if(groupId!=='all'&&!next.groups.some(g=>g&&g.id===groupId))groupId='all'; }
@@ -51,9 +57,12 @@
   function changeGroup(){player?.stop();active=null;history=new StationHistory();}
   const stations = $derived(lineup.filter(s => s.station.toLowerCase().includes(query.toLowerCase())));
   onMount(() => {
-    if(desktop) player = new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,onState:state => {playback = state;if(state.playing&&!state.loading)history.commit(state.key);}});
+    if(desktop) player = new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,tuningSource:async value=>{if(value==='')return null;if(typeof value!=='string'||value==='bundled')return bundledStatic;const path=await resolveTuningSound();return path?audioUrl(path):null;},onState:state => {playback = state;if(state.playing&&!state.loading)history.commit(state.key);}});
     void (async () => { try { config = await loadConfig(); } catch (e) { error = String(e); } finally { busy = false; } })();
-    return () => player?.dispose();
+    let disposed=false;let unlisten:(()=>void)|undefined;
+    if(desktop)void listenDesktop(desktopAction).then(stop=>{if(disposed)stop();else unlisten=stop;}).catch(e=>error=String(e));
+    let publishing=false;const publisher=setInterval(()=>{if(!desktop||publishing)return;publishing=true;void publish().catch(()=>{}).finally(()=>publishing=false);},250);
+    return () => {disposed=true;unlisten?.();clearInterval(publisher);player?.dispose();};
   });
   async function importLibrary() {
     busy = true; error = '';
@@ -80,7 +89,7 @@
     <div class="sidebar-note"><span class="signal">●</span> Local by design<br/><small>Rust preview · 0.1</small></div>
   </aside>
   <main>
-    <header><label class="search"><span>⌕</span><input aria-label="Search stations" placeholder="Search your stations" bind:value={query}/></label><span class="badge">FOUNDATION PREVIEW</span></header>
+    <header><label class="search"><span>⌕</span><input aria-label="Search stations" placeholder="Search your stations" bind:value={query}/></label><div class="actions"><button class="secondary" onclick={mini} disabled={!desktop}>Mini player</button><button onclick={()=>quitDesktop().catch(e=>error=String(e))} disabled={!desktop}>Quit</button></div></header>
     {#if error}<div class="error" role="alert">{error}</div>{/if}
     {#if playback?.error}<div class="notice" role="status">{playback.error}</div>{/if}
     {#if !desktop}<div class="notice">Browser preview. Open the desktop app to import your library.</div>{/if}

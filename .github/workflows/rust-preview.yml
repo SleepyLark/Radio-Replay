@@ -1,17 +1,27 @@
-name: Rust preview foundation
+name: Rust preview
 on:
+  workflow_dispatch:
   push:
     paths: ['rewrite/**', '.github/workflows/rust-preview.yml']
   pull_request:
     paths: ['rewrite/**', '.github/workflows/rust-preview.yml']
 jobs:
   foundation:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: rewrite
     steps:
       - uses: actions/checkout@v4
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev patchelf
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -27,3 +37,25 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test -p radio-replay-core --locked
       - run: cargo check -p radio-replay-desktop --locked
+  windows-package:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rewrite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rewrite/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm exec tauri -- build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radio-replay-windows-preview
+          path: |
+            rewrite/target/release/radio-replay-desktop.exe
+            rewrite/target/release/bundle/nsis/*.exe

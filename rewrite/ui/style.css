@@ -4,6 +4,95 @@
   gap: 12px;
   flex-wrap: wrap;
 }
+.mini-player {
+  position: fixed;
+  inset: 0;
+  background: #15161a;
+  border: 1px solid #343b2c;
+  border-radius: 10px;
+  padding: 8px 14px;
+  display: grid;
+  grid-template-rows: 22px 52px 40px 3px;
+  gap: 5px;
+}
+.mini-drag {
+  cursor: move;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--accent);
+  padding: 0;
+  user-select: none;
+}
+.mini-drag button {
+  cursor: pointer;
+  font-size: 18px;
+}
+.mini-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.mini-art {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: #282b24;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 32px;
+}
+.mini-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.mini-titles {
+  min-width: 0;
+}
+.mini-titles strong,
+.mini-titles small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-titles small {
+  margin-top: 3px;
+  font-size: 11px;
+}
+.mini-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mini-controls button {
+  font-size: 16px;
+}
+.mini-controls input {
+  width: 100px;
+  accent-color: var(--accent);
+}
+.mini-player progress {
+  width: 100%;
+  height: 3px;
+  accent-color: var(--accent);
+}
+.mini-error {
+  position: absolute;
+  bottom: 4px;
+  left: 14px;
+  right: 14px;
+  color: #ffb9b9;
+  background: #15161a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .secondary {
   border: 1px solid #3a3c43;
   border-radius: 7px;

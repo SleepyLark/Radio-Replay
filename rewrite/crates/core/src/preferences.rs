@@ -57,13 +57,30 @@ pub fn save_settings(config: &mut Config, patch: Map<String, Value>) -> Result<(
                 .as_f64()
                 .map(|n| n.is_finite() && (0.0..=30000.0).contains(&n))
                 .unwrap_or(false),
-            "showProgress" | "reduceMotion" | "randomNext" => value.is_boolean(),
+            "showProgress" | "reduceMotion" | "randomNext" | "closeToTray" | "tuningTransition" => {
+                value.is_boolean()
+            }
+            "tuningMinMs" | "tuningMaxMs" => value.as_u64().map(|n| n <= 1500).unwrap_or(false),
+            "staticPath" => value.is_string(),
             "listDensity" => matches!(value.as_str(), Some("compact" | "comfortable")),
             _ => false,
         };
         if !valid {
             return Err(format!("Invalid setting: {key}"));
         }
+    }
+    let minimum = patch
+        .get("tuningMinMs")
+        .or_else(|| config.settings.get("tuningMinMs"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let maximum = patch
+        .get("tuningMaxMs")
+        .or_else(|| config.settings.get("tuningMaxMs"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1500);
+    if minimum > maximum {
+        return Err("Minimum tuning delay exceeds maximum".into());
     }
     config.settings.extend(patch);
     Ok(())

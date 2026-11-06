@@ -1,3 +1,28 @@
 fn main() {
-    tauri_build::build()
+    let manifest = tauri_build::AppManifest::new().commands(&[
+        "load_config",
+        "import_config",
+        "choose_audio",
+        "choose_artwork",
+        "prepare_station",
+        "track_details",
+        "remember_duration",
+        "clear_metadata_cache",
+        "save_group",
+        "delete_group",
+        "save_settings",
+        "resolve_tuning_sound",
+        "recover_legacy_library",
+        "save_station",
+        "delete_station",
+        "desktop_publish",
+        "desktop_snapshot",
+        "desktop_action",
+        "desktop_open_mini",
+        "desktop_restore",
+        "desktop_quit",
+        "native_smoke_report",
+    ]);
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
+        .expect("Could not build desktop permissions");
 }

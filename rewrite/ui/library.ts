@@ -63,6 +63,8 @@ export const saveSettings = (patch: Record<string, unknown>) =>
   invoke<Config>('save_settings', { patch });
 export const clearMetadataCache = () => invoke<void>('clear_metadata_cache');
 export const audioUrl = (path: string) => convertFileSrc(path);
+export const resolveTuningSound = () => invoke<string | null>('resolve_tuning_sound');
+export const recoverLegacyLibrary = () => invoke<Config>('recover_legacy_library');
 export interface StationEdit {
   key: string;
   name: string;

@@ -16,16 +16,67 @@ let config = {
   groups: [],
   hidden: [],
   logos: {},
-  settings: { accent: '#ff8800', crossfade: 0, showProgress: true },
+  settings: { accent: '#ff8800', crossfade: 0, showProgress: true, tuningTransition: false },
 };
 const calls = [];
+const messages = [];
+const callbacks = new Map();
+const listeners = new Map();
+let nextId = 1;
+let snapshot = {
+  station: 'Fixture Radio',
+  title: 'Embedded song',
+  artist: 'Fixture artist',
+  album: 'Fixture album',
+  art: '',
+  accent: '#ff8800',
+  playing: true,
+  hasStation: true,
+  canNavigate: true,
+  seconds: 5,
+  duration: 30,
+  volume: 0.8,
+  muted: false,
+};
 contextBridge.exposeInMainWorld('isTauri', true);
 contextBridge.exposeInMainWorld('__testCalls', () => calls);
+contextBridge.exposeInMainWorld('__testMessages', () => messages);
+contextBridge.exposeInMainWorld('__TAURI_EVENT_PLUGIN_INTERNALS__', {
+  unregisterListener: (_event, id) => listeners.delete(id),
+});
 contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
+  metadata: {
+    currentWindow: { label: location.search.includes('mini=1') ? 'mini' : 'main' },
+    currentWebview: { label: location.search.includes('mini=1') ? 'mini' : 'main' },
+  },
+  transformCallback: (callback) => {
+    const id = nextId++;
+    callbacks.set(id, callback);
+    return id;
+  },
   convertFileSrc: () => location.origin + '/fixture.wav',
   invoke: async (command, args = {}) => {
     calls.push(command);
     switch (command) {
+      case 'plugin:event|listen': {
+        const id = nextId++;
+        listeners.set(id, args);
+        return id;
+      }
+      case 'plugin:event|unlisten':
+        return null;
+      case 'desktop_publish':
+        snapshot = args.snapshot;
+        return null;
+      case 'desktop_snapshot':
+        return snapshot;
+      case 'desktop_open_mini':
+      case 'desktop_restore':
+      case 'desktop_quit':
+        return null;
+      case 'desktop_action':
+        messages.push(args.action);
+        return null;
       case 'load_config':
         return config;
       case 'prepare_station': {

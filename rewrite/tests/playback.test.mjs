@@ -3,6 +3,44 @@ import assert from 'node:assert/strict';
 import { Playback } from '../ui/playback/engine.ts';
 import { clockFor, position, fadeSeconds, shuffle } from '../ui/playback/timeline.ts';
 
+test('tuning static is cleaned up after transition and honors mute', async () => {
+  const { player, audio } = setup();
+  player.options.tuningSource = async () => 'a';
+  player.mute();
+  try {
+    await player.tune(station('tuning', [track('a'), track('b')]), {
+      tuningMinMs: 20,
+      tuningMaxMs: 20,
+    });
+    assert.equal(player.noise, null);
+    assert.equal(player.state.playing, true);
+    assert.ok(audio.some((a) => a.plays === 1 && a.paused && a.volume === 0));
+  } finally {
+    player.dispose();
+  }
+});
+test('retuning cancels the delay and late tuning audio cannot restart', async () => {
+  const { player } = setup();
+  let resolve;
+  player.options.tuningSource = () => new Promise((r) => (resolve = r));
+  try {
+    const tuning = player.tune(station('cancel', [track('a')]), {
+      tuningMinMs: 1500,
+      tuningMaxMs: 1500,
+    });
+    await flush();
+    player.stop();
+    resolve('a');
+    await tuning;
+    await flush();
+    assert.equal(player.noise, null);
+    assert.equal(player.state.key, '');
+    assert.equal(player.state.playing, false);
+  } finally {
+    player.dispose();
+  }
+});
+
 test('persisted durations bypass probes and new measurements are sent to the cache', async () => {
   const { player, audio } = setup({ prepare: async () => [{ ...track('a'), duration: 20 }] });
   const remembered = [];
