@@ -14,7 +14,7 @@ export interface Config {
   root: string;
   custom: Station[];
   hidden: string[];
-  groups: unknown[];
+  groups: Group[];
   logos: Record<string, unknown>;
   settings: Record<string, unknown>;
   [key: string]: unknown;
@@ -34,8 +34,34 @@ export const importConfig = () => invoke<Config | null>('import_config');
 export interface PlayableTrack extends Track {
   size: number;
   modified: number;
+  duration?: number | null;
 }
-export const prepareStation = (key: string) => invoke<PlayableTrack[]>('prepare_station', { key });
+export const prepareStation = (key: string, group = 'all') =>
+  invoke<PlayableTrack[]>('prepare_station', { key, group });
+export interface Group {
+  id: string;
+  name: string;
+  members: string[];
+}
+export interface TrackDetails {
+  tags: { title: string; artist: string; album: string; duration: number | null };
+  sidecar: string | null;
+}
+export const trackDetails = (key: string, path: string) =>
+  invoke<TrackDetails>('track_details', { key, path });
+export const rememberDuration = (key: string, track: PlayableTrack, duration: number) =>
+  invoke<void>('remember_duration', {
+    key,
+    path: track.path,
+    size: track.size,
+    modified: track.modified,
+    duration,
+  });
+export const saveGroup = (group: Group) => invoke<Config>('save_group', { group });
+export const deleteGroup = (id: string) => invoke<Config>('delete_group', { id });
+export const saveSettings = (patch: Record<string, unknown>) =>
+  invoke<Config>('save_settings', { patch });
+export const clearMetadataCache = () => invoke<void>('clear_metadata_cache');
 export const audioUrl = (path: string) => convertFileSrc(path);
 export interface StationEdit {
   key: string;
@@ -43,6 +69,7 @@ export interface StationEdit {
   mode: string;
   tracks: Track[];
   logoPath: string | null;
+  options?: Record<string, unknown>;
 }
 export const chooseAudio = (folder: boolean) => invoke<Track[]>('choose_audio', { folder });
 export const chooseArtwork = () => invoke<string | null>('choose_artwork');

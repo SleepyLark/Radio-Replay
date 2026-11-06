@@ -5,6 +5,7 @@ export interface PlaybackState {
   key: string;
   station: string;
   title: string;
+  path: string;
   playing: boolean;
   loading: boolean;
   seconds: number;
@@ -33,6 +34,7 @@ export interface PlaybackOptions {
   prepare: (key: string) => Promise<PlayableTrack[]>;
   url: (path: string) => string;
   onState: (state: PlaybackState) => void;
+  rememberDuration?: (key: string, track: PlayableTrack, duration: number) => Promise<void>;
   audio?: () => HTMLAudioElement;
   context?: () => AudioContext;
   fetchBytes?: (url: string, signal: AbortSignal) => Promise<ArrayBuffer>;
@@ -44,6 +46,7 @@ export class Playback {
     key: '',
     station: '',
     title: '',
+    path: '',
     playing: false,
     loading: false,
     seconds: 0,
@@ -132,6 +135,7 @@ export class Playback {
       key: '',
       station: '',
       title: '',
+      path: '',
       playing: false,
       loading: false,
       seconds: 0,
@@ -145,6 +149,9 @@ export class Playback {
   }
   invalidate() {
     this.stop();
+    this.clearCache();
+  }
+  clearCache() {
     this.clocks.clear();
     this.durations.clear();
   }
@@ -185,7 +192,9 @@ export class Playback {
       signal.addEventListener('abort', aborted, { once: true });
     });
   }
-  private async probe(track: PlayableTrack, signal: AbortSignal) {
+  private async probe(track: PlayableTrack, signal: AbortSignal, stationKey: string) {
+    if (typeof track.duration === 'number' && Number.isFinite(track.duration) && track.duration > 0)
+      return track.duration;
     const key = `${track.path}:${track.size}:${track.modified}`;
     const cached = this.durations.get(key);
     if (cached) return cached;
@@ -196,6 +205,7 @@ export class Playback {
       await this.ready(element, signal);
       const duration = element.duration;
       this.durations.set(key, duration);
+      void this.options.rememberDuration?.(stationKey, track, duration).catch(() => {});
       if (this.durations.size > 20000) this.durations.delete(this.durations.keys().next().value!);
       return duration;
     } catch (e) {
@@ -205,7 +215,7 @@ export class Playback {
       this.release(element);
     }
   }
-  async tune(station: Station, settings: Record<string, unknown> = {}) {
+  async tune(station: Station, settings: Record<string, unknown> = {}, context = 'all') {
     this.stop();
     const token = this.token;
     const signal = this.controller.signal;
@@ -226,7 +236,7 @@ export class Playback {
         Array.from({ length: Math.min(6, tracks.length) }, async () => {
           while (next < tracks.length && !signal.aborted) {
             const i = next++;
-            lengths[i] = await this.probe(tracks[i], signal);
+            lengths[i] = await this.probe(tracks[i], signal, station.key);
           }
         }),
       );
@@ -243,7 +253,8 @@ export class Playback {
         station.mode,
         requestedFade,
       ]);
-      const existing = this.clocks.get(station.key);
+      const clockKey = `${context}:${station.key}`;
+      const existing = this.clocks.get(clockKey);
       const order =
         existing?.signature === signature
           ? existing.clock.order
@@ -261,12 +272,12 @@ export class Playback {
               this.random,
             );
       this.clock = clock;
-      this.clocks.delete(station.key);
-      this.clocks.set(station.key, { signature, clock });
+      this.clocks.delete(clockKey);
+      this.clocks.set(clockKey, { signature, clock });
       let retained = [...this.clocks.values()].reduce((n, c) => n + c.clock.order.length, 0);
       for (const [key, value] of this.clocks) {
         if (this.clocks.size <= 32 && retained <= 20000) break;
-        if (key === station.key) continue;
+        if (key === clockKey) continue;
         this.clocks.delete(key);
         retained -= value.clock.order.length;
       }
@@ -328,6 +339,7 @@ export class Playback {
     this.emit({
       engine: 'stream',
       title: clock.order[index].name,
+      path: clock.order[index].path,
       loading: false,
       playing: this.wantPlay,
       duration: element.duration,
@@ -469,7 +481,10 @@ export class Playback {
         this.spare = fade.outgoing;
         this.index = fade.index;
         this.fading = null;
-        this.emit({ title: this.clock.order[this.index].name });
+        this.emit({
+          title: this.clock.order[this.index].name,
+          path: this.clock.order[this.index].path,
+        });
         this.preload();
       }
     } else if (
@@ -535,7 +550,10 @@ export class Playback {
         return;
       }
       this.index = state.entries[0].index;
-      this.emit({ title: this.clock!.order[this.index].name });
+      this.emit({
+        title: this.clock!.order[this.index].name,
+        path: this.clock!.order[this.index].path,
+      });
       void this.fill(state);
     };
     state.entries.push(entry);
@@ -593,6 +611,7 @@ export class Playback {
       this.emit({
         engine: 'buffered',
         title: this.clock!.order[this.index].name,
+        path: this.clock!.order[this.index].path,
         playing: this.wantPlay,
         duration: first.duration,
         seconds: offset,

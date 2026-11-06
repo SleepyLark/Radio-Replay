@@ -37,7 +37,7 @@ npm run desktop
 - Create, rename and delete custom stations; add files or recursively scan a selected
   folder, remove/reorder tracks, choose music or broadcast mode and select artwork.
   Deletion removes group references but never deletes source media. Root-library
-  reconstruction from legacy `root`, group editing, lyrics, metadata/cache,
+  reconstruction from legacy `root`, tuning-static effects, remaining visual options,
   tray, media keys and mini player remain subsequent milestones.
 - Existing numeric crossfade values are preserved as-is. Convert their units at
   the playback boundary once, rather than during every configuration load.
@@ -69,7 +69,8 @@ change stations, and M toggles mute outside forms and editors.
 Station clocks start at a random position and advance silently with wall time when
 you tune elsewhere. Music shuffles once per retained session timeline; broadcasts
 retain their saved order. Pause freezes the audible stream/context, while an inactive
-station's wall clock continues. Configuration changes/imports reset playback and clocks.
+station's wall clock continues. Station/group edits, imports, and global fade changes
+reset playback; appearance-only edits and cache clearing leave current audio running.
 
 Music uses equal-power fades between two streaming elements. Existing global and
 per-station crossfade values are honored, including legacy seconds; music defaults
@@ -82,9 +83,40 @@ to streaming. Future decode failures drain scheduled audio before streaming cont
 Metadata probes run with at most six concurrent elements and cache duration by path,
 size and modification time in memory. Missing or unsupported tracks are skipped, with
 a visible notice. Rapid tuning cancels stale probes and clears old playback sources.
-Webview codec support remains platform-dependent. Tuning static/delay effects,
-random-station history, per-group playback and persistent metadata/duration caching
-are still pending; previous/next currently follow the full visible station lineup.
+Webview codec support remains platform-dependent. Tuning static/delay effects remain
+pending. Previous/next follow the selected group's lineup, with optional random
+selection and bounded backward/forward history.
+
+## Phase 4 library features
+
+- Rust reads embedded title, artist, album and duration with Lofty, skipping cover
+  art. Tags are parsed for the current track; tuning reads cached durations and
+  falls back to the browser's bounded metadata probes. A failed tag read leaves
+  filename playback available.
+- `metadata-cache.sqlite` in the preview data directory stores derived metadata,
+  keyed by canonical path and file signature (size, modification time and creation/
+  change stamp). It evicts old entries in batches around 20,000 rows. Corrupt or
+  unwritable caches fall back to uncached reads. Clear metadata cache also rebuilds
+  an unavailable database and clears session duration/clock caches without stopping audio.
+  This preview cache is independent of Electron's disposable duration cache.
+- Adjacent `.lrc`, then timestamped `.txt`, files are read fresh with a 1 MiB limit.
+  Standard minute/second timestamps, repeated timestamps and BOMs are supported;
+  malformed/untimed lines are ignored and output is bounded to 20,000 entries.
+  The lyric panel renders a small window around the current line. Broadcasts use
+  timestamps as segment titles by default. Station editing exposes text-mode and
+  crossfade overrides.
+- Groups can include full stations or individual music tracks. Rust enforces track
+  membership during preparation; each group retains separate station clocks. Removing
+  tracks/stations cleans group references. Unknown saved extension fields survive edits.
+- Settings currently expose accent, station density, reduced motion, recording
+  progress, global music crossfade, random-station navigation and cache clearing.
+  Existing settings not yet exposed remain in the configuration unchanged.
+
+After `npm run build`, `tests/ui-electron.cjs` exercises the built Svelte UI with an
+isolated mock backend and silent WAV fixture: tag/lyric display, one details request
+per track, accent application, group editing/filtering, settings and cache clearing.
+It saves `out/phase4-ui.png` for layout inspection. Run it with the same Electron
+test-host command below, replacing `audio-electron.cjs` with `ui-electron.cjs`.
 
 `tests/audio-electron.cjs` additionally exercises the engine using real Chromium
 Audio and AudioContext with generated silent WAVs. It uses the original checkout's

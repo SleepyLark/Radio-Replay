@@ -28,12 +28,13 @@ pub fn image_file(path: &Path) -> bool {
     )
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PlayableTrack {
     #[serde(flatten)]
     pub track: Track,
     pub size: u64,
     pub modified: u128,
+    pub duration: Option<f64>,
 }
 
 /// Resolve only tracks belonging to a saved station; missing files are skipped.
@@ -61,6 +62,7 @@ pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, 
         let mut track = track.clone();
         track.path = path.to_string_lossy().into_owned();
         files.push(PlayableTrack {
+            duration: None,
             track,
             size: meta.len(),
             modified: meta
@@ -72,6 +74,34 @@ pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, 
         });
     }
     Ok(files)
+}
+pub fn playback_files_for_group(
+    mut config: Config,
+    key: &str,
+    group: Option<&str>,
+) -> Result<Vec<PlayableTrack>, String> {
+    if let Some(id) = group.filter(|g| *g != "all") {
+        let members = config
+            .groups
+            .iter()
+            .find(|g| g["id"].as_str() == Some(id))
+            .and_then(|g| g["members"].as_array())
+            .ok_or("Group unavailable")?
+            .clone();
+        let station = config
+            .custom
+            .iter_mut()
+            .find(|s| s.key == key)
+            .ok_or("Station unavailable")?;
+        if !members.iter().any(|m| m.as_str() == Some(key)) {
+            station.tracks.retain(|t| {
+                members
+                    .iter()
+                    .any(|m| m.as_str() == Some(&format!("{key}|{}", t.path)))
+            });
+        }
+    }
+    playback_files(&config, key)
 }
 pub fn track(path: PathBuf) -> Result<Track, String> {
     if !audio_file(&path) || !path.is_file() {
@@ -136,6 +166,8 @@ pub struct StationEdit {
     pub mode: String,
     pub tracks: Vec<Track>,
     pub logo_path: Option<String>,
+    #[serde(default)]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 pub fn upsert(
@@ -153,7 +185,37 @@ pub fn upsert(
     if edit.tracks.is_empty() {
         return Err("Add at least one audio file".into());
     }
+    for (key, value) in &edit.options {
+        let valid = match key.as_str() {
+            "crossfade" => {
+                value.is_null()
+                    || value
+                        .as_f64()
+                        .map(|n| n == 0.0 || (100.0..=30000.0).contains(&n))
+                        .unwrap_or(false)
+            }
+            "textMode" => matches!(
+                value.as_str(),
+                Some("auto" | "titles" | "lyrics" | "ignore")
+            ),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!("Invalid station option: {key}"));
+        }
+    }
     let existing = config.custom.iter().position(|s| s.key == edit.key);
+    let retained_paths: HashSet<&str> = edit.tracks.iter().map(|t| t.path.as_str()).collect();
+    let removed_members: HashSet<String> = existing
+        .map(|i| {
+            config.custom[i]
+                .tracks
+                .iter()
+                .filter(|t| !retained_paths.contains(t.path.as_str()))
+                .map(|t| format!("{}|{}", edit.key, t.path))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut seen = HashSet::new();
     for track in &edit.tracks {
         let retained = existing
@@ -184,6 +246,7 @@ pub fn upsert(
     station.tracks = edit.tracks;
     station.extra.insert("mode".into(), edit.mode.into());
     station.extra.insert("custom".into(), true.into());
+    station.extra.extend(edit.options);
     if let Some(path) = edit.logo_path {
         if path.is_empty() {
             config.logos.remove(&edit.key);
@@ -194,6 +257,15 @@ pub fn upsert(
     match existing {
         Some(i) => config.custom[i] = station,
         None => config.custom.push(station),
+    }
+    for group in &mut config.groups {
+        if let Some(members) = group.get_mut("members").and_then(|m| m.as_array_mut()) {
+            members.retain(|m| {
+                m.as_str()
+                    .map(|m| !removed_members.contains(m))
+                    .unwrap_or(true)
+            });
+        }
     }
     Ok(())
 }
@@ -242,6 +314,20 @@ mod tests {
         let files = playback_files(&config, "new").unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 4);
+        config.groups.push(serde_json::json!({"id":"subset","name":"Subset","members":[format!("new|{}",config.custom[0].tracks[0].path)]}));
+        assert_eq!(
+            playback_files_for_group(config.clone(), "new", Some("subset"))
+                .unwrap()
+                .len(),
+            1
+        );
+        config.groups[0]["members"] = serde_json::json!([]);
+        assert!(
+            playback_files_for_group(config.clone(), "new", Some("subset"))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(playback_files_for_group(config.clone(), "new", Some("unknown")).is_err());
         fs::remove_file(path).unwrap();
         assert!(playback_files(&config, "new").unwrap().is_empty());
     }
@@ -269,6 +355,7 @@ mod tests {
                 extra: Default::default(),
             }],
             logo_path: None,
+            options: Default::default(),
         }
     }
     #[test]
@@ -296,6 +383,23 @@ mod tests {
         config
             .groups
             .push(serde_json::json!({"members":["new", "new|song.mp3", "other"]}));
+        let mut replacement = edit();
+        replacement.tracks[0].path = "replacement.mp3".into();
+        replacement
+            .options
+            .insert("textMode".into(), "titles".into());
+        upsert(
+            &mut config,
+            replacement,
+            &HashSet::from(["replacement.mp3".into()]),
+            &images,
+        )
+        .unwrap();
+        assert_eq!(
+            config.groups[0]["members"],
+            serde_json::json!(["new", "other"])
+        );
+        assert_eq!(config.custom[0].extra["textMode"], "titles");
         remove(&mut config, "new").unwrap();
         assert_eq!(config.groups[0]["members"], serde_json::json!(["other"]));
         assert!(config.custom.is_empty());

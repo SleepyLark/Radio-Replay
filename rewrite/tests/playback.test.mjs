@@ -3,6 +3,39 @@ import assert from 'node:assert/strict';
 import { Playback } from '../ui/playback/engine.ts';
 import { clockFor, position, fadeSeconds, shuffle } from '../ui/playback/timeline.ts';
 
+test('persisted durations bypass probes and new measurements are sent to the cache', async () => {
+  const { player, audio } = setup({ prepare: async () => [{ ...track('a'), duration: 20 }] });
+  const remembered = [];
+  player.options.rememberDuration = async (...args) => remembered.push(args);
+  try {
+    await player.tune(station('cached', [track('a')]));
+    assert.equal(audio.length, 2);
+    assert.equal(remembered.length, 0);
+    player.options.prepare = async () => [track('b')];
+    await player.tune(station('fresh', [track('b')]));
+    assert.equal(remembered[0][0], 'fresh');
+    assert.equal(remembered[0][2], 20);
+  } finally {
+    player.dispose();
+  }
+});
+test('each group retains its own station clock', async () => {
+  const { player, setNow } = setup();
+  const s = station('same', [track('a'), track('b')]);
+  try {
+    await player.tune(s, {}, 'first');
+    setNow(5000);
+    await player.tune(s, {}, 'second');
+    setNow(10000);
+    await player.tune(s, {}, 'first');
+    assert.equal(player.state.seconds, 10);
+    await player.tune(s, {}, 'second');
+    assert.equal(player.state.seconds, 5);
+  } finally {
+    player.dispose();
+  }
+});
+
 const track = (path, size = 100) => ({ path, name: path, size, modified: 1 });
 const station = (key, tracks, mode = 'tracks', crossfade = 0) => ({
   key,

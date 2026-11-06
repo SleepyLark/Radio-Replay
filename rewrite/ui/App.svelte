@@ -1,6 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { desktop, emptyConfig, loadConfig, importConfig, artworkUrl, audioUrl, prepareStation, type Config, type Station } from './library';
+  import { onMount, tick } from 'svelte';
+  import { desktop, emptyConfig, loadConfig, importConfig, artworkUrl, audioUrl, prepareStation, rememberDuration, trackDetails, type TrackDetails, type Config, type Station } from './library';
+  import Groups from './Groups.svelte';
+  import Settings from './Settings.svelte';
+  import { groupLineup,parseTimedText,currentLine,StationHistory } from './playback/text';
   import { Playback, type PlaybackState } from './playback/engine';
   import StationEditor from './StationEditor.svelte';
   let config = $state(emptyConfig());
@@ -13,26 +16,48 @@
   let editTarget = $state<Station | null>(null);
   let player: Playback | null = null;
   let playback = $state<PlaybackState | null>(null);
-  const lineup = $derived(config.custom.filter(s => !config.hidden.includes(s.key)));
-  function tune(station: Station) { active = station; if(desktop) void player?.tune(station,config.settings); }
+  let groupId=$state('all');
+  let history=new StationHistory();
+  let details=$state<TrackDetails|null>(null);
+  const metadataKey=$derived(playback?.key??'');
+  const metadataPath=$derived(playback?.path??'');
+  const groups=$derived(config.groups.filter(g=>g&&typeof g.id==='string'&&Array.isArray(g.members)));
+  const selectedGroup=$derived(groups.find(g=>g.id===groupId));
+  const lineup = $derived(groupLineup(config.custom.filter(s => !config.hidden.includes(s.key)),selectedGroup));
+  const timed=$derived(parseTimedText(details?.sidecar??null));
+  const lineIndex=$derived(currentLine(timed,playback?.seconds??0));
+  const lyricStart=$derived(Math.max(0,lineIndex-5));
+  const lyricWindow=$derived(timed.slice(lyricStart,lyricStart+16));
+  const playingStation=$derived(config.custom.find(s=>s.key===playback?.key));
+  const textMode=$derived(['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
+  const embeddedTitle=$derived(details?.tags.title?`${details.tags.artist?details.tags.artist+' - ':''}${details.tags.title}`:playback?.title??'');
+  const displayTitle=$derived(textMode==='titles'&&lineIndex>=0?timed[lineIndex].text:embeddedTitle);
+  $effect(()=>{ const key=metadataKey,path=metadataPath;details=null;let cancelled=false;if(key&&path)void trackDetails(key,path).then(value=>{if(!cancelled)details=value;}).catch(()=>{});return()=>{cancelled=true;}; });
+  $effect(()=>{ const current=lineIndex, mode=textMode, visible=view==='Stations'&&!editing, reduced=config.settings.reduceMotion===true;let cancelled=false; if(visible&&mode==='lyrics'&&current>=0)void tick().then(()=>{if(!cancelled)document.querySelector('.lyrics .current')?.scrollIntoView({block:'nearest',behavior:reduced?'auto':'smooth'});});return()=>{cancelled=true;}; });
+  $effect(()=>{document.documentElement.style.setProperty('--accent',typeof config.settings.accent==='string'?config.settings.accent:'#c7f464');document.documentElement.dataset.density=String(config.settings.listDensity??'comfortable');document.documentElement.classList.toggle('reduce-motion',config.settings.reduceMotion===true);});
+  function tune(station: Station,navigation=false) { if(!navigation)history.cancelPending();active = station; const members=selectedGroup?new Set(selectedGroup.members):null; const projected=members&&!members.has(station.key)?{...station,tracks:station.tracks.filter(t=>members.has(`${station.key}|${t.path}`))}:station; if(desktop) void player?.tune(projected,config.settings,groupId); }
+  function showView(next:string){view=next;void tick().then(()=>document.querySelector('main')?.scrollTo({top:0}));}
   function step(direction: number) {
     if(!lineup.length) return;
+    if(config.settings.randomNext===true){const next=history.next(lineup,direction);if(next)tune(next,true);return;}
     const index = lineup.findIndex(s => s.key === playback?.key);
     tune(lineup[(Math.max(0,index) + direction + lineup.length) % lineup.length]);
   }
   function toggle() { if(playback?.playing) void player?.pause(); else void player?.play(); }
   function time(seconds: number) { const n = Math.floor(Math.max(0,seconds)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2,'0')}`; }
   function edit(station: Station | null) { editTarget = station; editing = true; }
-  function saved(next: Config) { player?.invalidate(); config = next; active = next.custom.find(s => s.key === active?.key) ?? null; editing = false; }
-  const stations = $derived(config.custom.filter(s => !config.hidden.includes(s.key) && s.station.toLowerCase().includes(query.toLowerCase())));
+  function saved(next: Config) { player?.invalidate();history=new StationHistory(); config = next; active = next.custom.find(s => s.key === active?.key) ?? null; editing = false;if(groupId!=='all'&&!next.groups.some(g=>g&&g.id===groupId))groupId='all'; }
+  function preferencesSaved(next:Config){if(next.settings.crossfade!==config.settings.crossfade)player?.invalidate();config=next;}
+  function changeGroup(){player?.stop();active=null;history=new StationHistory();}
+  const stations = $derived(lineup.filter(s => s.station.toLowerCase().includes(query.toLowerCase())));
   onMount(() => {
-    if(desktop) player = new Playback({prepare:prepareStation,url:audioUrl,onState:state => playback = state});
+    if(desktop) player = new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,onState:state => {playback = state;if(state.playing&&!state.loading)history.commit(state.key);}});
     void (async () => { try { config = await loadConfig(); } catch (e) { error = String(e); } finally { busy = false; } })();
     return () => player?.dispose();
   });
   async function importLibrary() {
     busy = true; error = '';
-    try { const imported = await importConfig(); if (imported) { player?.invalidate(); config = imported; active = null; } }
+    try { const imported = await importConfig(); if (imported) { saved(imported); active = null; } }
     catch (e) { error = String(e); }
     finally { busy = false; }
   }
@@ -48,9 +73,10 @@
 
 <div class="shell">
   <aside>
-    <button class="brand" onclick={() => view = 'Stations'} aria-label="Radio Replay home">◉ <span>RADIO<br/>REPLAY</span></button>
+    <button class="brand" onclick={() => showView('Stations')} aria-label="Radio Replay home">◉ <span>RADIO<br/>REPLAY</span></button>
     <p class="eyebrow">YOUR FREQUENCIES</p>
-    <nav>{#each ['Stations', 'Groups', 'Settings'] as item}<button class:selected={view === item} onclick={() => view = item}>{item}</button>{/each}</nav>
+    <nav>{#each ['Stations', 'Groups', 'Settings'] as item}<button class:selected={view === item} onclick={() => showView(item)}>{item}</button>{/each}</nav>
+    <label class="group-selector">Station group<select bind:value={groupId} onchange={changeGroup}><option value="all">All stations</option>{#each groups as group}<option value={group.id}>{group.name}</option>{/each}</select></label>
     <div class="sidebar-note"><span class="signal">●</span> Local by design<br/><small>Rust preview · 0.1</small></div>
   </aside>
   <main>
@@ -67,10 +93,12 @@
       {:else if stations.length}
         <div class="grid">{#each stations as station}<button class="station" class:active={active?.key === station.key} onclick={() => tune(station)}><div class="art">{#if artworkUrl(config.logos[station.key])}<img src={artworkUrl(config.logos[station.key])} alt="" />{:else}◉{/if}<span>{station.station.slice(0, 2).toUpperCase()}</span></div><strong>{station.station}</strong><small>{station.tracks.length} tracks · {station.mode === 'tracks' ? 'Music station' : 'Broadcast'}</small></button>{/each}</div>
       {:else}<section class="empty"><div class="dial">◎</div><h2>A fresh frequency</h2><p>Import your existing Radio Replay configuration to browse your stations here.</p><small>Your audio stays in its original folders.</small></section>{/if}
-      {#if active}<section class="details"><div class="actions"><h2>{active.station}</h2><button class="secondary" onclick={() => edit(active)} disabled={!desktop}>Edit station</button></div><p>{playback?.key === active.key ? playback.loading ? 'Tuning…' : playback.title : 'Select this station to tune in.'}</p>{#each active.tracks as track}<div class="track"><span>{track.name}</span><small>{track.path}</small></div>{/each}</section>{/if}
+      {#if active}<section class="details"><div class="actions"><h2>{active.station}</h2><button class="secondary" onclick={() => edit(active)} disabled={!desktop}>Edit station</button></div><p>{playback?.key === active.key ? playback.loading ? 'Tuning…' : displayTitle : 'Select this station to tune in.'}</p>{#if details?.tags.album}<small>{details.tags.album}</small>{/if}
+      {#if textMode==='lyrics'&&timed.length}<div class="lyrics" aria-label="Synchronized lyrics">{#each lyricWindow as line,index}<p class:current={index+lyricStart===lineIndex}>{line.text}</p>{/each}</div>{/if}
+      {#each active.tracks as track}<div class="track"><span>{track.name}</span><small>{track.path}</small></div>{/each}</section>{/if}
       {/if}
-    {:else if view === 'Groups'}<section class="heading"><div><h1>Your groups</h1><p>{config.groups.length} groups preserved from your library. Group editing arrives in a later milestone.</p></div></section>
-    {:else}<section class="heading"><div><h1>Settings</h1><p>This preview saves imported data separately from the Electron app.</p><p>Existing appearance and playback settings are preserved for the next milestones.</p></div></section>{/if}
+    {:else if view === 'Groups'}<Groups {config} onsaved={saved}/>
+    {:else}<Settings {config} onsaved={preferencesSaved} oncachecleared={()=>player?.clearCache()}/>{/if}
   </main>
-  <footer><div class="now-icon">◉</div><div class="now-playing"><strong>{playback?.station || 'Nothing tuned yet'}</strong><small>{playback?.title || 'Choose a station to tune in'}</small></div><div class="player-controls"><div class="transport"><button disabled={!desktop || !lineup.length} aria-label="Previous station" onclick={() => step(-1)}>|◁</button><button disabled={!playback?.key || playback.loading} aria-label={playback?.playing ? 'Pause' : 'Play'} onclick={toggle}>{playback?.playing ? '❚❚' : '▷'}</button><button disabled={!desktop || !lineup.length} aria-label="Next station" onclick={() => step(1)}>▷|</button></div><div class="progress"><span>{time(playback?.seconds ?? 0)}</span><progress aria-label="Recording progress" max="1" value={playback?.duration ? playback.seconds / playback.duration : 0}></progress><span>{time(playback?.duration ?? 0)}</span></div></div><div class="volume"><button aria-label={playback?.muted ? 'Unmute' : 'Mute'} onclick={() => player?.mute()} disabled={!desktop}>{playback?.muted ? 'Muted' : 'Volume'}</button><input aria-label="Volume" type="range" min="0" max="1" step="0.01" value={playback?.volume ?? .8} oninput={event => player?.setVolume(Number(event.currentTarget.value))} disabled={!desktop}/></div></footer>
+  <footer><div class="now-icon">◉</div><div class="now-playing"><strong>{playback?.station || 'Nothing tuned yet'}</strong><small>{displayTitle || 'Choose a station to tune in'}</small></div><div class="player-controls"><div class="transport"><button disabled={!desktop || !lineup.length} aria-label="Previous station" onclick={() => step(-1)}>|◁</button><button disabled={!playback?.key || playback.loading} aria-label={playback?.playing ? 'Pause' : 'Play'} onclick={toggle}>{playback?.playing ? '❚❚' : '▷'}</button><button disabled={!desktop || !lineup.length} aria-label="Next station" onclick={() => step(1)}>▷|</button></div>{#if config.settings.showProgress!==false}<div class="progress"><span>{time(playback?.seconds ?? 0)}</span><progress aria-label="Recording progress" max="1" value={playback?.duration ? playback.seconds / playback.duration : 0}></progress><span>{time(playback?.duration ?? 0)}</span></div>{/if}</div><div class="volume"><button aria-label={playback?.muted ? 'Unmute' : 'Mute'} onclick={() => player?.mute()} disabled={!desktop}>{playback?.muted ? 'Muted' : 'Volume'}</button><input aria-label="Volume" type="range" min="0" max="1" step="0.01" value={playback?.volume ?? .8} oninput={event => player?.setVolume(Number(event.currentTarget.value))} disabled={!desktop}/></div></footer>
 </div>

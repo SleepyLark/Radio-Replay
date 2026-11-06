@@ -123,6 +123,86 @@
   width: 90px;
   accent-color: #c7f464;
 }
+.shell .brand,
+.shell nav button.selected,
+.shell .signal,
+.shell .dial,
+.shell .notice,
+.shell .badge,
+.shell .now-icon {
+  color: var(--accent, #c7f464);
+}
+.shell .primary {
+  background: var(--accent, #c7f464);
+}
+.shell button:focus-visible,
+.shell a:focus-visible,
+.shell input:focus-visible {
+  outline-color: var(--accent, #c7f464);
+}
+.shell .volume input,
+.shell .progress progress {
+  accent-color: var(--accent, #c7f464);
+}
+.group-selector {
+  margin-top: 24px;
+  font-size: 12px;
+  color: #9d9eaa;
+}
+.group-selector select {
+  width: 100%;
+  background: #1c1e23;
+  color: #eeeef3;
+  border: 1px solid #3a3c43;
+  border-radius: 7px;
+  padding: 10px;
+  margin-top: 8px;
+}
+.editor .check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.editor .check input {
+  width: auto;
+  margin: 0;
+}
+.editor input[type='color'] {
+  width: 100px;
+  height: 44px;
+  padding: 4px;
+}
+.editor .track-choice {
+  margin-left: 28px;
+}
+.lyrics {
+  max-height: 280px;
+  overflow: auto;
+  padding: 16px 24px;
+  border: 1px solid #303239;
+  border-radius: 10px;
+  margin: 24px 0;
+}
+.lyrics p {
+  opacity: 0.6;
+}
+.lyrics .current {
+  color: var(--accent, #c7f464);
+  opacity: 1;
+  font-weight: 650;
+}
+[data-density='compact'] .grid {
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+[data-density='compact'] .station {
+  padding: 6px;
+}
+.reduce-motion * {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
 :root {
   font-family:
     Inter,
@@ -138,6 +218,7 @@
 }
 body {
   margin: 0;
+  overflow: hidden;
 }
 button,
 input {
@@ -162,7 +243,7 @@ button:disabled {
 .shell {
   display: grid;
   grid-template-columns: 224px 1fr;
-  grid-template-rows: 1fr 88px;
+  grid-template-rows: minmax(0, 1fr) 88px;
   height: 100vh;
 }
 aside {
