@@ -190,3 +190,32 @@ the packaged Tauri webview on each target platform.
 This checkout branches from the committed Electron baseline. Uncommitted changes
 in the original checkout were deliberately left there and must be included when
 establishing feature parity. This is a local development fork, not a new GitHub repository.
+
+## Preview 0.2: Electron-style radio UI
+
+- Restores the Electron palette and bundled Oswald/DM Mono fonts, compact station
+  cards, persistent searchable station lineup, and a dedicated on-air player.
+  Returning to the library or selecting the current station preserves playback.
+- The player displays a station banner/logo, track tags, synchronized lyrics,
+  transport, volume and optional read-only progress. Arrow keys and mouse wheel
+  tune stations; Space pauses, M mutes, and + / - adjust volume. Wheel tuning is
+  throttled and does not intercept scrolling inside lyrics or form controls.
+- Station editing opens a keyboard-accessible modal with a live preview and
+  Essentials, Appearance and Advanced sections. Logo, banner image/color, station
+  accent and optional logo rotation are editable. Native selection grants apply
+  to banners as well as logos; imported images are scoped on library load.
+- Name and visual edits preserve playback and prepared-media access. Changes to
+  the playing station's files or playback options refresh its program. Editing
+  another station leaves the current station's media permissions intact.
+- Manage stations provides direct access to editing/deletion, and Settings now
+  separates General, Appearance, Playback and Advanced preferences. Settings use
+  an explicit Save button. Groups remain on their own management screen.
+- A compact transport stays available while browsing other screens. The separate
+  always-on-top mini window continues to control the same audio engine.
+
+The UI smoke also checks player navigation without retuning, live editor preview,
+saving without interrupted audio, and layout at 760×560. It saves `out/ui-home.png`,
+`out/ui-player.png`, `out/ui-editor.png` and `out/ui-player-small.png`. Native smoke
+checks the bundled fonts, restored image assets and actual Rust station save.
+This is a UX parity pass; automatic banner color sampling and all original
+appearance preferences are not yet exposed.

@@ -75,10 +75,19 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
         });
     }
     let mut config = Config::default();
+    let art = directory.join("fixture.png");
+    std::fs::write(&art, include_bytes!("../../../assets/icons/radio.png"))?;
     for (key, name) in [("a", "Native A"), ("b", "Native B")] {
         let mut extra = serde_json::Map::new();
         extra.insert("mode".into(), "longset".into());
         extra.insert("textMode".into(), "lyrics".into());
+        extra.insert(
+            "bannerPath".into(),
+            art.to_string_lossy().into_owned().into(),
+        );
+        config
+            .logos
+            .insert(key.into(), art.to_string_lossy().into_owned().into());
         config.custom.push(Station {
             key: key.into(),
             station: name.into(),

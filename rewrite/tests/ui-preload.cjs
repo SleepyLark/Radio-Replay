@@ -18,6 +18,14 @@ let config = {
   logos: {},
   settings: { accent: '#ff8800', crossfade: 0, showProgress: true, tuningTransition: false },
 };
+for (const [key, station, mode] of [
+  ['night', 'Night Drive', 'tracks'],
+  ['coast', 'Coastline FM', 'longset'],
+  ['ambient', 'Slow Signals', 'tracks'],
+  ['jazz', 'After Hours', 'tracks'],
+  ['archive', 'Archive 89.4', 'longset'],
+])
+  config.custom.push({ key, station, mode, tracks: [{ path: 'first.wav', name: 'First' }] });
 const calls = [];
 const messages = [];
 const callbacks = new Map();
@@ -103,6 +111,16 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         };
       case 'remember_duration':
         return null;
+      case 'save_station': {
+        const edit = args.edit;
+        config.custom = config.custom.map((s) =>
+          s.key === edit.key
+            ? { ...s, ...edit.options, station: edit.name, mode: edit.mode, tracks: edit.tracks }
+            : s,
+        );
+        config.logos[edit.key] = edit.logoPath;
+        return config;
+      }
       case 'save_group':
         config.groups = config.groups.filter((g) => g.id !== args.group.id).concat(args.group);
         return config;

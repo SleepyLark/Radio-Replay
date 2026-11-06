@@ -276,6 +276,29 @@ pub fn upsert(
                 value.as_str(),
                 Some("auto" | "titles" | "lyrics" | "ignore")
             ),
+            "spinLogo" => value.is_boolean(),
+            "accent" | "bannerColor" => value
+                .as_str()
+                .map(|s| {
+                    s.is_empty()
+                        || (s.len() == 7
+                            && s.starts_with('#')
+                            && s[1..].bytes().all(|b| b.is_ascii_hexdigit()))
+                })
+                .unwrap_or(false),
+            "bannerPath" => value
+                .as_str()
+                .map(|path| {
+                    path.is_empty()
+                        || (image_file(Path::new(path))
+                            && (images.contains(path)
+                                || config.custom.iter().any(|s| {
+                                    s.key == edit.key
+                                        && s.extra.get("bannerPath").and_then(|v| v.as_str())
+                                            == Some(path)
+                                })))
+                })
+                .unwrap_or(false),
             _ => false,
         };
         if !valid {
@@ -505,6 +528,33 @@ mod tests {
         request.logo_path = Some("secret.png".into());
         assert!(upsert(&mut config, request, &audio, &images).is_err());
         assert!(config.custom.is_empty());
+    }
+    #[test]
+    fn station_visuals_validate_colors_and_retain_only_authorized_banners() {
+        let mut config = Config::default();
+        let audio = HashSet::from(["song.mp3".into()]);
+        let images = HashSet::from(["banner.png".into()]);
+        let mut request = edit();
+        request.options = serde_json::from_value(
+            serde_json::json!({"bannerPath":"private.png","accent":"#c7f464","spinLogo":true}),
+        )
+        .unwrap();
+        assert!(upsert(&mut config, request, &audio, &images).is_err());
+        let mut request = edit();
+        request.options = serde_json::from_value(serde_json::json!({"bannerPath":"banner.png","bannerColor":"#244b42","accent":"#c7f464","spinLogo":true})).unwrap();
+        upsert(&mut config, request, &audio, &images).unwrap();
+        let mut request = edit();
+        request
+            .options
+            .insert("bannerPath".into(), "banner.png".into());
+        upsert(&mut config, request, &HashSet::new(), &HashSet::new()).unwrap();
+        let mut request = edit();
+        request
+            .options
+            .insert("accent".into(), "red;display:none".into());
+        assert!(upsert(&mut config, request, &audio, &images).is_err());
+        assert_eq!(config.custom[0].extra["bannerPath"], "banner.png");
+        assert_eq!(config.custom[0].extra["accent"], "#c7f464");
     }
     #[test]
     fn edits_preserve_options_and_removal_cleans_references() {

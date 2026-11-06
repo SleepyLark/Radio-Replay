@@ -176,7 +176,12 @@ async fn resolve_tuning_sound(
 }
 
 fn allow_art(app: &tauri::AppHandle, config: &Config) {
-    for path in config.logos.values().filter_map(|v| v.as_str()) {
+    for path in config.logos.values().filter_map(|v| v.as_str()).chain(
+        config
+            .custom
+            .iter()
+            .filter_map(|s| s.extra.get("bannerPath").and_then(|v| v.as_str())),
+    ) {
         if library::image_file(Path::new(path)) && Path::new(path).is_file() {
             let _ = app.asset_protocol_scope().allow_file(path);
         }
@@ -308,6 +313,18 @@ async fn prepare_station(
 fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config, String> {
     let store = library.0.lock().map_err(|e| e.to_string())?;
     let mut config = store.load()?;
+    let station_prefix = format!("{}\0", edit.key);
+    let paths_changed = config
+        .custom
+        .iter()
+        .find(|s| s.key == edit.key)
+        .map(|s| {
+            s.tracks
+                .iter()
+                .map(|t| &t.path)
+                .ne(edit.tracks.iter().map(|t| &t.path))
+        })
+        .unwrap_or(true);
     library::upsert(
         &mut config,
         edit,
@@ -315,7 +332,13 @@ fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config
         &*library.2.lock().map_err(|e| e.to_string())?,
     )?;
     store.save(&config)?;
-    library.3.lock().map_err(|e| e.to_string())?.clear();
+    if paths_changed {
+        library
+            .3
+            .lock()
+            .map_err(|e| e.to_string())?
+            .retain(|key, _| !key.starts_with(&station_prefix));
+    }
     Ok(config)
 }
 
@@ -325,7 +348,12 @@ fn delete_station(library: State<'_, Library>, key: String) -> Result<Config, St
     let mut config = store.load()?;
     library::remove(&mut config, &key)?;
     store.save(&config)?;
-    library.3.lock().map_err(|e| e.to_string())?.clear();
+    let station_prefix = format!("{key}\0");
+    library
+        .3
+        .lock()
+        .map_err(|e| e.to_string())?
+        .retain(|key, _| !key.starts_with(&station_prefix));
     Ok(config)
 }
 

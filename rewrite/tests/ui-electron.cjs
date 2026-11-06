@@ -76,21 +76,45 @@ app
     });
     try {
       await window.loadURL(`http://127.0.0.1:${server.address().port}`);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      fs.writeFileSync(
+        path.join(output, 'ui-home.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
       const result = await window.webContents.executeJavaScript(
         `(async()=>{
       const wait=ms=>new Promise(r=>setTimeout(r,ms));const assert=(ok,message)=>{if(!ok)throw new Error(message);};
       const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
-      await wait(200);Math.random=()=>0;document.querySelector('.station').click();for(let i=0;i<100&&!document.querySelector('.now-playing').textContent.includes('Embedded song');i++)await wait(50);await wait(200);
+      await wait(200);Math.random=()=>0;document.querySelector('.station').click();for(let i=0;i<100&&!document.querySelector('.now-playing')?.textContent.includes('Embedded song');i++)await wait(50);await wait(200);
       assert(document.querySelector('.now-playing').textContent.includes('Fixture artist - Embedded song'),'Embedded tags not displayed');
       assert(document.querySelector('.lyrics .current')?.textContent==='Opening lyric','Synchronized lyric not highlighted');
       assert(window.__testCalls().filter(c=>c==='track_details').length===1,'Metadata fetched repeatedly on progress ticks');
       assert(getComputedStyle(document.querySelector('.brand')).color==='rgb(255, 136, 0)','Saved accent not applied');
+      assert(!document.querySelector('.grid'),'Home cards remain on the dedicated player');
+      button('All Stations')?.click();button('← All Stations').click();await wait(30);document.querySelector('.station').click();await wait(100);
+      assert(window.__testCalls().filter(c=>c==='prepare_station').length===1,'Returning to the player restarted audio');
+      button('✎ Edit station').click();await wait(50);assert(document.querySelector('dialog')?.open,'Station editor is not modal');
+      const stationName=document.querySelector('dialog input');stationName.value='Fixture Radio Live';stationName.dispatchEvent(new Event('input',{bubbles:true}));await wait(30);
+      assert(document.querySelector('.banner-preview h1').textContent==='Fixture Radio Live','Editor preview did not update');
+      [...document.querySelectorAll('dialog summary')].find(e=>e.textContent==='Appearance').click();
+      const editorLabel=text=>[...document.querySelectorAll('dialog label')].find(e=>e.textContent.includes(text));
+      editorLabel('Use a banner color').querySelector('input').click();await wait(20);
+      const color=editorLabel('Banner color').querySelector('input');color.value='#244b42';color.dispatchEvent(new Event('input',{bubbles:true}));
+      editorLabel('Override player accent').querySelector('input').click();await wait(20);
+      const accent=editorLabel('Station accent').querySelector('input');accent.value='#c7f464';accent.dispatchEvent(new Event('input',{bubbles:true}));await wait(20);
+      assert(getComputedStyle(document.querySelector('.banner-preview')).backgroundColor==='rgb(36, 75, 66)','Live banner color did not update');
+      button('Save station').click();await wait(100);
+      assert(!document.querySelector('dialog'),'Editor did not close after saving');
+      assert(document.querySelector('.now-playing strong').textContent==='Fixture Radio Live','Station rename not reflected in player');
+      assert(document.querySelector('[aria-label="Pause"]'),'Appearance edit interrupted playback');
+      assert(window.__testCalls().filter(c=>c==='prepare_station').length===1,'Appearance edit retuned audio');
+      assert(getComputedStyle(document.querySelector('.brand')).color==='rgb(199, 244, 100)','Station accent override not applied');
       button('Groups').click();await wait(50);const name=document.querySelector('.editor input:not([type])');name.value='Favorites';name.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.track-choice input').click();await wait(20);button('Save group').click();await wait(100);
       const selector=document.querySelector('.group-selector select');selector.value=[...selector.options].find(o=>o.text==='Favorites').value;selector.dispatchEvent(new Event('change',{bubbles:true}));button('Stations').click();await wait(50);document.querySelector('.station').click();await wait(200);
       assert(window.__testCalls().filter(c=>c==='prepare_station').length===2,'Group station did not retune');
-      button('Settings').click();await wait(50);const label=[...document.querySelectorAll('.editor label')].find(l=>l.textContent.includes('Show recording progress'));label.querySelector('input').click();button('Save settings').click();await wait(100);
+      button('Settings').click();await wait(50);button('Appearance').click();await wait(20);const label=[...document.querySelectorAll('.editor label')].find(l=>l.textContent.includes('Show recording progress'));label.querySelector('input').click();button('Save settings').click();await wait(100);
       assert(!document.querySelector('.progress'),'Hidden progress setting not applied');
-      button('Clear metadata cache').click();await wait(100);assert(window.__testCalls().includes('clear_metadata_cache'),'Cache clear not requested');
+      button('Advanced').click();await wait(20);button('Clear metadata cache').click();await wait(100);assert(window.__testCalls().includes('clear_metadata_cache'),'Cache clear not requested');
       return 'UI smoke passed: tags, timed lyrics, one metadata request per track, accent, group editing/filtering, settings and cache clearing.';
     })()`,
         true,
@@ -100,6 +124,34 @@ app
         (await window.webContents.capturePage()).toPNG(),
       );
       console.log(result);
+      await window.webContents.executeJavaScript(
+        `(async()=>{document.querySelector('nav button').click();await new Promise(r=>setTimeout(r,30));document.querySelector('.station').click();})()`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      fs.writeFileSync(
+        path.join(output, 'ui-player.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(`document.querySelector('.edit-link').click()`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      fs.writeFileSync(
+        path.join(output, 'ui-editor.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(
+        `document.querySelector('[aria-label="Close station editor"]').click()`,
+      );
+      window.setContentSize(760, 560);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      console.log(
+        await window.webContents.executeJavaScript(
+          `(()=>{if(document.querySelector('main').scrollWidth>document.querySelector('main').clientWidth)throw new Error('Player overflows narrow window');return 'Responsive player fits 760 × 560';})()`,
+        ),
+      );
+      fs.writeFileSync(
+        path.join(output, 'ui-player-small.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
       window.setContentSize(480, 160);
       await window.loadURL(`http://127.0.0.1:${server.address().port}/index.html?mini=1`);
       console.log(

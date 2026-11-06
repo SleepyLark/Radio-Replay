@@ -54,16 +54,33 @@ void (async () => {
         'Fixture library did not load',
       );
       Math.random = () => 0;
-      document.querySelector('[aria-label="Mute"]').click();
       document.querySelector('.station').click();
       await until(
         () => !!document.querySelector('[aria-label="Pause"]'),
         'WebView2 audio playback failed',
       );
+      document.querySelector('[aria-label="Mute"]').click();
       await until(
         () => !!document.querySelector('.lyrics .current'),
         'Native sidecar did not load',
       );
+      await until(
+        () =>
+          ['.banner-image', '.station-logo img'].every(
+            (selector) => document.querySelector(selector)?.naturalWidth > 0,
+          ),
+        'Saved banner or logo asset was not granted',
+      );
+      await document.fonts.ready;
+      assert(
+        document.fonts.check('600 24px Oswald') && document.fonts.check('12px "DM Mono"'),
+        'Bundled radio fonts did not load',
+      );
+      document.querySelector('.edit-link').click();
+      await until(() => document.querySelector('dialog')?.open, 'Native editor did not open');
+      document.querySelector('dialog button[type="submit"]').click();
+      await until(() => !document.querySelector('dialog'), 'Native station save did not complete');
+      assert(document.querySelector('[aria-label="Pause"]'), 'Visual save stopped native audio');
       await wait(300);
       const snapshot = await invoke('desktop_snapshot');
       assert(
@@ -83,7 +100,7 @@ void (async () => {
       await wait(200);
       assert((await invoke('desktop_snapshot')).playing, 'Closing to tray stopped the player');
       [...document.querySelectorAll('button')]
-        .find((button) => button.textContent.trim() === 'Mini player')
+        .find((button) => button.textContent.trim().endsWith('Mini player'))
         .click();
       await until(
         () => document.querySelector('.now-playing strong')?.textContent === 'Native B',
