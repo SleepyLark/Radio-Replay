@@ -1,3 +1,87 @@
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.secondary {
+  border: 1px solid #3a3c43;
+  border-radius: 7px;
+  padding: 10px 14px;
+}
+.danger {
+  color: #ffb9b9;
+  border: 1px solid #6b3539;
+  border-radius: 7px;
+  padding: 10px 14px;
+}
+.editor {
+  border: 1px solid #303239;
+  border-radius: 12px;
+  padding: 24px;
+}
+.editor fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.editor label {
+  display: block;
+  margin: 20px 0;
+}
+.editor input,
+.editor select {
+  display: block;
+  border: 1px solid #3a3c43;
+  border-radius: 7px;
+  padding: 12px;
+  margin-top: 8px;
+  background: #1c1e23;
+  color: #eeeef3;
+  max-width: 500px;
+  width: 100%;
+}
+.editor-art {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 24px 0;
+}
+.editor-art img {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+.editor-tracks {
+  max-height: 360px;
+  overflow: auto;
+}
+.editor-track {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.editor-track > div:first-child {
+  min-width: 0;
+}
+.editor-footer {
+  margin-top: 24px;
+}
+.art img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 10px;
+}
+.art:has(img) span {
+  background: #101114c9;
+  padding: 4px;
+  border-radius: 4px;
+}
 :root {
   font-family:
     Inter,

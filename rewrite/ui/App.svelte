@@ -1,12 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { desktop, emptyConfig, loadConfig, importConfig, type Station } from './library';
+  import { desktop, emptyConfig, loadConfig, importConfig, artworkUrl, type Config, type Station } from './library';
+  import StationEditor from './StationEditor.svelte';
   let config = $state(emptyConfig());
   let query = $state('');
   let active = $state<Station | null>(null);
   let busy = $state(true);
   let error = $state('');
   let view = $state('Stations');
+  let editing = $state(false);
+  let editTarget = $state<Station | null>(null);
+  function edit(station: Station | null) { editTarget = station; editing = true; }
+  function saved(next: Config) { config = next; active = next.custom.find(s => s.key === active?.key) ?? null; editing = false; }
   const stations = $derived(config.custom.filter(s => !config.hidden.includes(s.key) && s.station.toLowerCase().includes(query.toLowerCase())));
   onMount(async () => {
     try { config = await loadConfig(); } catch (e) { error = String(e); }
@@ -32,12 +37,16 @@
     {#if error}<div class="error" role="alert">{error}</div>{/if}
     {#if !desktop}<div class="notice">Browser preview. Open the desktop app to import your library.</div>{/if}
     {#if view === 'Stations'}
-      <section class="heading"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h1>Your stations</h1><p>Your collection, on your frequency.</p></div><button class="primary" onclick={importLibrary} disabled={busy || !desktop}>Import stations.json</button></section>
+      <section class="heading"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h1>Your stations</h1><p>Your collection, on your frequency.</p></div><div class="actions"><button class="secondary" onclick={importLibrary} disabled={busy || !desktop || editing}>Import stations.json</button><button class="primary" onclick={() => edit(null)} disabled={busy || !desktop || editing}>Create station</button></div></section>
+      {#if editing}
+        {#key editTarget?.key}<StationEditor station={editTarget} logo={editTarget ? config.logos[editTarget.key] : ''} onsaved={saved} oncancel={() => editing = false}/>{/key}
+      {:else}
       {#if busy}<p role="status">Loading library…</p>
       {:else if stations.length}
-        <div class="grid">{#each stations as station}<button class="station" class:active={active?.key === station.key} onclick={() => active = station}><div class="art">◉<span>{station.station.slice(0, 2).toUpperCase()}</span></div><strong>{station.station}</strong><small>{station.tracks.length} tracks · {station.mode === 'tracks' ? 'Music station' : 'Broadcast'}</small></button>{/each}</div>
+        <div class="grid">{#each stations as station}<button class="station" class:active={active?.key === station.key} onclick={() => active = station}><div class="art">{#if artworkUrl(config.logos[station.key])}<img src={artworkUrl(config.logos[station.key])} alt="" />{:else}◉{/if}<span>{station.station.slice(0, 2).toUpperCase()}</span></div><strong>{station.station}</strong><small>{station.tracks.length} tracks · {station.mode === 'tracks' ? 'Music station' : 'Broadcast'}</small></button>{/each}</div>
       {:else}<section class="empty"><div class="dial">◎</div><h2>A fresh frequency</h2><p>Import your existing Radio Replay configuration to browse your stations here.</p><small>Your audio stays in its original folders.</small></section>{/if}
-      {#if active}<section class="details"><h2>{active.station}</h2><p>Playback is the next migration milestone.</p>{#each active.tracks as track}<div class="track"><span>{track.name}</span><small>{track.path}</small></div>{/each}</section>{/if}
+      {#if active}<section class="details"><div class="actions"><h2>{active.station}</h2><button class="secondary" onclick={() => edit(active)} disabled={!desktop}>Edit station</button></div><p>Playback is the next migration milestone.</p>{#each active.tracks as track}<div class="track"><span>{track.name}</span><small>{track.path}</small></div>{/each}</section>{/if}
+      {/if}
     {:else if view === 'Groups'}<section class="heading"><div><h1>Your groups</h1><p>{config.groups.length} groups preserved from your library. Group editing arrives in a later milestone.</p></div></section>
     {:else}<section class="heading"><div><h1>Settings</h1><p>This preview saves imported data separately from the Electron app.</p><p>Existing appearance and playback settings are preserved for the next milestones.</p></div></section>{/if}
   </main>

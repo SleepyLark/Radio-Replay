@@ -33,13 +33,20 @@ npm run desktop
   Corrupt destination data blocks writes.
 - The preview uses `com.local.radioreplay.preview` and its own Tauri app-data
   directory. Import copies configuration without modifying Electron's source file.
-- Only explicit custom stations appear initially. Root-folder scanning, artwork,
-  station editing, group interactions, playback, lyrics, metadata/cache, tray,
-  media keys and mini player are subsequent milestones. Playback buttons are disabled.
+- Create, rename and delete custom stations; add files or recursively scan a selected
+  folder, remove/reorder tracks, choose music or broadcast mode and select artwork.
+  Deletion removes group references but never deletes source media. Root-library
+  reconstruction from legacy `root`, group editing, playback, lyrics, metadata/cache,
+  tray, media keys and mini player remain subsequent milestones. Playback buttons are disabled.
 - Existing numeric crossfade values are preserved as-is. Convert their units at
   the playback boundary once, rather than during every configuration load.
-- The renderer has no general filesystem/shell capability or unrestricted asset
-  protocol. Local playback/artwork must get a scoped access design before enabling.
+- The renderer has no general filesystem/shell capability. Rust grants exact selected
+  audio paths for station saves and exact image files for the asset protocol. Artwork
+  grants are restored from the saved library at startup. Imported missing media paths
+  can be retained while editing. No audio asset access is exposed yet.
+- Folder scans run off the UI thread, use deterministic filename order, skip symlinks
+  and Windows reparse points, and fail visibly on unreadable directories or scan limits
+  (64 levels / 50,000 audio files). Supported formats match Electron.
 
 ## Migration sequence
 

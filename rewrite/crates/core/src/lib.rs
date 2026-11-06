@@ -1,4 +1,5 @@
 //! Portable domain and persistence layer. No windowing or playback dependencies.
+pub mod library;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{

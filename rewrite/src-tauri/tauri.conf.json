@@ -14,8 +14,12 @@
       { "title": "Radio Replay", "width": 1200, "height": 800, "minWidth": 760, "minHeight": 560 }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+      "assetProtocol": { "enable": true, "scope": [] },
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost"
     }
   },
-  "bundle": { "active": false, "icon": ["../../assets/icons/radio.ico", "../../assets/icons/radio.png"] }
+  "bundle": {
+    "active": false,
+    "icon": ["../../assets/icons/radio.ico", "../../assets/icons/radio.png"]
+  }
 }

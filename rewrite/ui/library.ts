@@ -1,4 +1,4 @@
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri, convertFileSrc } from '@tauri-apps/api/core';
 export interface Track {
   path: string;
   name: string;
@@ -31,3 +31,16 @@ export const emptyConfig = (): Config => ({
 export const loadConfig = () =>
   desktop ? invoke<Config>('load_config') : Promise.resolve(emptyConfig());
 export const importConfig = () => invoke<Config | null>('import_config');
+export interface StationEdit {
+  key: string;
+  name: string;
+  mode: string;
+  tracks: Track[];
+  logoPath: string | null;
+}
+export const chooseAudio = (folder: boolean) => invoke<Track[]>('choose_audio', { folder });
+export const chooseArtwork = () => invoke<string | null>('choose_artwork');
+export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });
+export const deleteStation = (key: string) => invoke<Config>('delete_station', { key });
+export const artworkUrl = (path: unknown) =>
+  desktop && typeof path === 'string' && path ? convertFileSrc(path) : '';

@@ -8,7 +8,7 @@ license = "MIT"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 radio-replay-core = { path = "../crates/core" }
 serde = { version = "1", features = ["derive"] }
