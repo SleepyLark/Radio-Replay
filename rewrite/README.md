@@ -18,6 +18,7 @@ npm run desktop
 
 `npm run dev` opens the browser-only layout preview (no filesystem access).
 `npm run check` checks Svelte/TypeScript; `npm run build` builds the frontend;
+`npm run test:playback` runs deterministic playback/timeline regressions with Node 22.18+;
 `cargo test -p radio-replay-core` verifies configuration compatibility and persistence;
 `cargo check -p radio-replay-desktop` checks the native shell.
 
@@ -36,14 +37,15 @@ npm run desktop
 - Create, rename and delete custom stations; add files or recursively scan a selected
   folder, remove/reorder tracks, choose music or broadcast mode and select artwork.
   Deletion removes group references but never deletes source media. Root-library
-  reconstruction from legacy `root`, group editing, playback, lyrics, metadata/cache,
-  tray, media keys and mini player remain subsequent milestones. Playback buttons are disabled.
+  reconstruction from legacy `root`, group editing, lyrics, metadata/cache,
+  tray, media keys and mini player remain subsequent milestones.
 - Existing numeric crossfade values are preserved as-is. Convert their units at
   the playback boundary once, rather than during every configuration load.
 - The renderer has no general filesystem/shell capability. Rust grants exact selected
   audio paths for station saves and exact image files for the asset protocol. Artwork
   grants are restored from the saved library at startup. Imported missing media paths
-  can be retained while editing. No audio asset access is exposed yet.
+  can be retained while editing. Audio access is granted only after Rust resolves a
+  saved station key; the renderer cannot request an arbitrary audio path.
 - Folder scans run off the UI thread, use deterministic filename order, skip symlinks
   and Windows reparse points, and fail visibly on unreadable directories or scan limits
   (64 levels / 50,000 audio files). Supported formats match Electron.
@@ -57,6 +59,45 @@ npm run desktop
    background station time and gapless/crossfade semantics before replacing audio.
 4. Port metadata, duration cache, sidecars, groups and settings.
 5. Add tray, media controls, mini player, packaging and platform regression checks.
+
+## Phase 3 playback
+
+Select a station to tune in. The player provides play/pause, previous/next station,
+volume/mute and recording progress (read-only). Space toggles playback, Up/Down
+change stations, and M toggles mute outside forms and editors.
+
+Station clocks start at a random position and advance silently with wall time when
+you tune elsewhere. Music shuffles once per retained session timeline; broadcasts
+retain their saved order. Pause freezes the audible stream/context, while an inactive
+station's wall clock continues. Configuration changes/imports reset playback and clocks.
+
+Music uses equal-power fades between two streaming elements. Existing global and
+per-station crossfade values are honored, including legacy seconds; music defaults
+to five seconds and broadcasts to zero. Fades are clamped to half the shortest track.
+Broadcasts with multiple recordings up to ten minutes / 64 MiB each can use scheduled
+AudioBuffers for gapless handoffs. The decoded cache is capped at 64 MiB per buffer
+and 128 MiB total; longer files, unsupported decodes, or budget overruns fall back
+to streaming. Future decode failures drain scheduled audio before streaming continues.
+
+Metadata probes run with at most six concurrent elements and cache duration by path,
+size and modification time in memory. Missing or unsupported tracks are skipped, with
+a visible notice. Rapid tuning cancels stale probes and clears old playback sources.
+Webview codec support remains platform-dependent. Tuning static/delay effects,
+random-station history, per-group playback and persistent metadata/duration caching
+are still pending; previous/next currently follow the full visible station lineup.
+
+`tests/audio-electron.cjs` additionally exercises the engine using real Chromium
+Audio and AudioContext with generated silent WAVs. It uses the original checkout's
+Electron development dependency solely as a test host; no Electron code ships in
+the Tauri app. From this nested worktree on Windows, run:
+
+```powershell
+..\..\..\node_modules\.bin\electron.cmd tests/audio-electron.cjs
+```
+
+This smoke covers real decode, adjacent broadcast scheduling, pause/resume, crossfade
+handoff and cleanup. It is not a substitute for codec and asset-protocol testing in
+the packaged Tauri webview on each target platform.
 
 This checkout branches from the committed Electron baseline. Uncommitted changes
 in the original checkout were deliberately left there and must be included when

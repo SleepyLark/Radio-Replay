@@ -113,6 +113,22 @@ async fn choose_artwork(
 }
 
 #[tauri::command]
+async fn prepare_station(
+    app: tauri::AppHandle,
+    library: State<'_, Library>,
+    key: String,
+) -> Result<Vec<library::PlayableTrack>, String> {
+    let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+    let tracks = library::playback_files(&config, &key)?;
+    for track in &tracks {
+        app.asset_protocol_scope()
+            .allow_file(&track.track.path)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(tracks)
+}
+
+#[tauri::command]
 fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config, String> {
     let store = library.0.lock().map_err(|e| e.to_string())?;
     let mut config = store.load()?;
@@ -152,6 +168,7 @@ fn main() {
             import_config,
             choose_audio,
             choose_artwork,
+            prepare_station,
             save_station,
             delete_station
         ])

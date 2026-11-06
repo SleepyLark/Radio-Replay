@@ -22,6 +22,7 @@ jobs:
           components: rustfmt
       - run: npm ci
       - run: npm run check
+      - run: npm run test:playback
       - run: npm run build
       - run: cargo fmt --all -- --check
       - run: cargo test -p radio-replay-core --locked

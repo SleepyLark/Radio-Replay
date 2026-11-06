@@ -31,6 +31,12 @@ export const emptyConfig = (): Config => ({
 export const loadConfig = () =>
   desktop ? invoke<Config>('load_config') : Promise.resolve(emptyConfig());
 export const importConfig = () => invoke<Config | null>('import_config');
+export interface PlayableTrack extends Track {
+  size: number;
+  modified: number;
+}
+export const prepareStation = (key: string) => invoke<PlayableTrack[]>('prepare_station', { key });
+export const audioUrl = (path: string) => convertFileSrc(path);
 export interface StationEdit {
   key: string;
   name: string;

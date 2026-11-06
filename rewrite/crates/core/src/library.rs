@@ -1,5 +1,6 @@
 use crate::{Config, Station, Track};
 use serde::Deserialize;
+use serde::Serialize;
 use std::{
     collections::HashSet,
     fs,
@@ -25,6 +26,52 @@ pub fn image_file(path: &Path) -> bool {
             .as_str(),
         "png" | "jpg" | "jpeg" | "webp" | "gif"
     )
+}
+
+#[derive(Serialize)]
+pub struct PlayableTrack {
+    #[serde(flatten)]
+    pub track: Track,
+    pub size: u64,
+    pub modified: u128,
+}
+
+/// Resolve only tracks belonging to a saved station; missing files are skipped.
+pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, String> {
+    let station = config
+        .custom
+        .iter()
+        .find(|s| s.key == key)
+        .ok_or("Station no longer exists")?;
+    let mut files = Vec::new();
+    for track in &station.tracks {
+        let path = Path::new(&track.path);
+        if !audio_file(path) {
+            continue;
+        }
+        let Ok(path) = fs::canonicalize(path) else {
+            continue;
+        };
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let mut track = track.clone();
+        track.path = path.to_string_lossy().into_owned();
+        files.push(PlayableTrack {
+            track,
+            size: meta.len(),
+            modified: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+        });
+    }
+    Ok(files)
 }
 pub fn track(path: PathBuf) -> Result<Track, String> {
     if !audio_file(&path) || !path.is_file() {
@@ -181,6 +228,23 @@ pub fn remove(config: &mut Config, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn playback_resolves_only_saved_audio_and_skips_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("song.wav");
+        fs::write(&path, b"test").unwrap();
+        let mut config = Config::default();
+        let mut request = edit();
+        request.tracks[0].path = path.to_string_lossy().into_owned();
+        let grants = HashSet::from([request.tracks[0].path.clone()]);
+        upsert(&mut config, request, &grants, &HashSet::new()).unwrap();
+        assert!(playback_files(&config, "not-saved").is_err());
+        let files = playback_files(&config, "new").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 4);
+        fs::remove_file(path).unwrap();
+        assert!(playback_files(&config, "new").unwrap().is_empty());
+    }
     #[test]
     fn scans_nested_supported_files_in_order() {
         let dir = tempfile::tempdir().unwrap();
