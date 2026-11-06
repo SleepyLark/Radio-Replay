@@ -223,18 +223,35 @@ export class Playback {
       this.release(element);
     }
   }
-  private async beginTuning(settings: Record<string, unknown>, token: number, signal: AbortSignal) {
-    if (!this.options.tuningSource) return;
-    const ms = tuningMilliseconds(settings, this.random);
-    if (!ms) return;
+  private beginTuning(settings: Record<string, unknown>, token: number, signal: AbortSignal) {
+    const ms = this.options.tuningSource ? tuningMilliseconds(settings, this.random) : 0;
     let done = false;
-    const owner: { audio: HTMLAudioElement | null } = { audio: null };
+    let sound: HTMLAudioElement | null = null;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let finishMinimum = () => {};
+    const minimum = new Promise<void>((resolve) => {
+      finishMinimum = resolve;
+      if (ms) timeout = setTimeout(resolve, ms);
+      else resolve();
+    });
+    const stop = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      finishMinimum();
+      signal.removeEventListener('abort', stop);
+      if (sound) {
+        this.release(sound);
+        if (this.noise === sound) this.noise = null;
+      }
+    };
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
     void this.options
-      .tuningSource(settings.staticPath)
+      .tuningSource?.(settings.staticPath)
       .then((source) => {
         if (!source || done || token !== this.token || signal.aborted || !this.wantPlay) return;
-        const sound = (this.options.audio ?? (() => new Audio()))();
-        owner.audio = sound;
+        sound = (this.options.audio ?? (() => new Audio()))();
         this.noise = sound;
         sound.loop = true;
         sound.src = source;
@@ -242,27 +259,9 @@ export class Playback {
         void sound.play().catch(() => {});
       })
       .catch(() => {});
-    try {
-      await new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          resolve();
-          return;
-        }
-        const finish = () => {
-          clearTimeout(timeout);
-          signal.removeEventListener('abort', finish);
-          resolve();
-        };
-        const timeout = setTimeout(finish, ms);
-        signal.addEventListener('abort', finish, { once: true });
-      });
-    } finally {
-      done = true;
-      if (owner.audio) {
-        this.release(owner.audio);
-        if (this.noise === owner.audio) this.noise = null;
-      }
-    }
+    // The timer sets a minimum delay. Only the owning tune (or cancellation)
+    // stops static, so it covers preparation, metadata probes and audio startup.
+    return { minimum, stop };
   }
   async tune(station: Station, settings: Record<string, unknown> = {}, context = 'all') {
     this.stop();
@@ -331,7 +330,7 @@ export class Playback {
         this.clocks.delete(key);
         retained -= value.clock.order.length;
       }
-      await transition;
+      await transition.minimum;
       if (token !== this.token) return;
       const at = position(clock, this.now());
       this.index = at.index;
@@ -370,6 +369,8 @@ export class Playback {
           error: String(e),
         });
       }
+    } finally {
+      transition.stop();
     }
   }
   private async startStream(index: number, seconds: number, token: number) {

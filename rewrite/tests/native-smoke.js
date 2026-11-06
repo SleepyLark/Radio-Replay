@@ -54,12 +54,19 @@ void (async () => {
         'Fixture library did not load',
       );
       Math.random = () => 0;
+      assert(!document.querySelector('.compact-player'), 'Bar visible before tuning');
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
       document.querySelector('.station').click();
       await until(
         () => !!document.querySelector('[aria-label="Pause"]'),
         'WebView2 audio playback failed',
       );
-      document.querySelector('[aria-label="Mute"]').click();
+      assert(!document.querySelector('.compact-player'), 'Bar visible on player screen');
+      document.querySelector('.back-stations').click();
+      await until(() => !!document.querySelector('.compact-player'), 'Bar missing on All Stations');
+      document.querySelector('.compact-title').click();
+      await until(() => !!document.querySelector('.radio-screen'), 'Bar did not reopen player');
+      assert(!document.querySelector('.compact-player'), 'Bar remained on reopened player');
       await until(
         () => !!document.querySelector('.lyrics .current'),
         'Native sidecar did not load',

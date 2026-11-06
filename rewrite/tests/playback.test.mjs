@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Playback } from '../ui/playback/engine.ts';
 import { clockFor, position, fadeSeconds, shuffle } from '../ui/playback/timeline.ts';
 
-test('tuning static is cleaned up after transition and honors mute', async () => {
+test('tuning static is cleaned up when playback is ready and honors mute', async () => {
   const { player, audio } = setup();
   player.options.tuningSource = async () => 'a';
   player.mute();
@@ -15,6 +15,94 @@ test('tuning static is cleaned up after transition and honors mute', async () =>
     assert.equal(player.noise, null);
     assert.equal(player.state.playing, true);
     assert.ok(audio.some((a) => a.plays === 1 && a.paused && a.volume === 0));
+  } finally {
+    player.dispose();
+  }
+});
+test('static loops past the minimum delay through preparation and stream startup', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let finishPrepare, finishPlay;
+  const { player } = setup({ prepare: () => new Promise((resolve) => (finishPrepare = resolve)) });
+  player.options.tuningSource = async () => 'c';
+  const originalPlay = player.current.play.bind(player.current);
+  player.current.play = () =>
+    new Promise(
+      (resolve) =>
+        (finishPlay = async () => {
+          await originalPlay();
+          resolve();
+        }),
+    );
+  try {
+    const tuning = player.tune(station('slow', [track('a')]), { tuningMinMs: 20, tuningMaxMs: 20 });
+    await flush();
+    const noise = player.noise;
+    assert.ok(noise);
+    assert.equal(noise.loop, true);
+    t.mock.timers.tick(100);
+    await flush();
+    assert.equal(player.state.loading, true);
+    assert.equal(noise.paused, false, 'Static stopped after minimum delay');
+    player.setVolume(0.35);
+    assert.equal(noise.volume, 0.35);
+    finishPrepare([{ ...track('a'), duration: 20 }]);
+    await flush();
+    assert.ok(finishPlay, 'Stream did not reach startup');
+    assert.equal(noise.paused, false, 'Static stopped before stream play resolved');
+    await finishPlay();
+    await tuning;
+    assert.equal(player.state.playing, true);
+    assert.equal(player.noise, null);
+    assert.equal(noise.paused, true);
+    assert.equal(noise.src, '');
+  } finally {
+    player.dispose();
+  }
+});
+test('loading-only and zero-delay tuning still loop static until ready', async () => {
+  for (const settings of [{ tuningTransition: false }, { tuningMinMs: 0, tuningMaxMs: 0 }]) {
+    let finishPrepare;
+    const { player } = setup({
+      prepare: () => new Promise((resolve) => (finishPrepare = resolve)),
+    });
+    player.options.tuningSource = async () => 'c';
+    try {
+      const tuning = player.tune(station('loading', [track('a')]), settings);
+      await flush();
+      const noise = player.noise;
+      assert.ok(noise, 'No loading static when delay is disabled');
+      assert.equal(noise.loop, true);
+      assert.equal(noise.paused, false);
+      finishPrepare([{ ...track('a'), duration: 20 }]);
+      await tuning;
+      assert.equal(player.noise, null);
+      assert.equal(noise.paused, true);
+    } finally {
+      player.dispose();
+    }
+  }
+});
+test('a stale tune finishing cannot stop the new station static', async () => {
+  const pending = new Map();
+  const { player } = setup({
+    prepare: (key) => new Promise((resolve) => pending.set(key, resolve)),
+  });
+  player.options.tuningSource = async () => 'c';
+  try {
+    const old = player.tune(station('old', [track('a')]), { tuningTransition: false });
+    await flush();
+    const oldNoise = player.noise;
+    const current = player.tune(station('current', [track('b')]), { tuningTransition: false });
+    await flush();
+    const newNoise = player.noise;
+    assert.equal(oldNoise.paused, true);
+    pending.get('old')([{ ...track('a'), duration: 20 }]);
+    await old;
+    assert.equal(player.noise, newNoise);
+    assert.equal(newNoise.paused, false);
+    pending.get('current')([{ ...track('b'), duration: 20 }]);
+    await current;
+    assert.equal(newNoise.paused, true);
   } finally {
     player.dispose();
   }

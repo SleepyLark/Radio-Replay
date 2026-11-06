@@ -34,7 +34,37 @@ window.audioSmoke = async () => {
     random: () => 0,
   });
   player.setVolume(0);
+  const noiseUrl = URL.createObjectURL(wav(0.08));
   try {
+    let finishPrepare;
+    player.options.prepare = () => new Promise((resolve) => (finishPrepare = resolve));
+    player.options.tuningSource = async () => noiseUrl;
+    const tuning = player.tune(
+      { key: 'slow-tuning', station: 'Slow tuning', tracks: [tracks[0]], mode: 'tracks' },
+      { tuningMinMs: 20, tuningMaxMs: 20 },
+    );
+    for (
+      let i = 0;
+      i < 100 && (!player.noise || player.noise.readyState < 2 || player.noise.paused);
+      i++
+    )
+      await wait(20);
+    const noise = player.noise;
+    assert(noise && !noise.paused, 'Real tuning static did not start');
+    await wait(350);
+    assert(
+      noise.duration < 0.2 && noise.loop && !noise.ended && !noise.paused && player.noise === noise,
+      'Static did not loop past its recording and minimum transition',
+    );
+    assert(player.state.loading, 'Slow fixture was not still tuning');
+    finishPrepare([{ ...tracks[0], duration: 1.2 }]);
+    await tuning;
+    assert(
+      player.state.playing && player.noise === null && noise.paused,
+      'Static was not released when station started',
+    );
+    player.options.prepare = async () => tracks;
+    player.options.tuningSource = undefined;
     await player.tune({ key: 'broadcast', station: 'Broadcast', tracks, mode: 'longset' });
     assert(
       player.state.engine === 'buffered',
@@ -63,9 +93,10 @@ window.audioSmoke = async () => {
     assert(player.current !== first, 'Real audio crossfade did not swap streams');
     await player.pause();
     assert(player.current.paused && player.spare.paused, 'Pause did not stop both streams');
-    return 'Real audio smoke passed: decode, scheduled gapless handoff, pause/resume, streaming crossfade, cleanup.';
+    return 'Real audio smoke passed: looping tuning static, decode, scheduled gapless handoff, pause/resume, streaming crossfade, cleanup.';
   } finally {
     player.dispose();
+    URL.revokeObjectURL(noiseUrl);
     urls.forEach((url) => URL.revokeObjectURL(url));
   }
 };

@@ -89,14 +89,16 @@ app
         const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
         const label=text=>[...document.querySelectorAll('label')].find(l=>l.textContent.includes(text));
         Math.random=()=>0;
+        assert(!document.querySelector('.compact-player'),'Bar visible before tuning');
         document.querySelector('.home-station').click();
         await until(()=>document.querySelector('.track-title')?.textContent.includes('Embedded song'),'Embedded tags not displayed');
         assert(document.querySelector('.lyrics .current')?.textContent==='Opening lyric','Synced lyric missing');
         assert(!document.querySelector('#homeView'),'Home remains in player');
-        assert(document.querySelector('.compact-player'),'Bottom bar missing from player');
+        assert(!document.querySelector('.compact-player'),'Bottom bar visible on player');
         assert(getComputedStyle(document.querySelector('.signal')).color==='rgb(255, 136, 0)','Saved accent not applied');
         await wait(200);
         assert(window.__testCalls().filter(c=>c==='track_details').length===1,'Metadata fetched on progress ticks');
+        button('← All Stations').click();await wait(30);assert(document.querySelector('.compact-player'),'Bar missing after returning to All Stations');document.querySelector('.compact-title').click();await wait(30);assert(!document.querySelector('.compact-player'),'Bar remained after reopening player');
         button('← All Stations').click();await wait(30);document.querySelector('.home-station').click();await wait(60);
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===1,'Returning to player restarted audio');
         button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Editor not modal');
@@ -126,6 +128,7 @@ app
         document.querySelector('.sidebar-station').click();await until(()=>document.querySelector('[aria-label="Pause"]'),'Group did not play');
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===2,'Group station did not retune');
         button('⚙ Settings').click();await wait(30);button('Appearance').click();await wait(20);
+        assert(!document.querySelector('.compact-player'),'Bar visible in Settings');
         label('Show recording progress').querySelector('input').click();
         await until(()=>window.__testSettings().showProgress===false,'Setting did not autosave');
         assert(!document.querySelector('.progress'),'Progress still visible');
@@ -138,7 +141,7 @@ app
         button('Advanced').click();await wait(20);button('Clear metadata cache').click();await until(()=>window.__testCalls().includes('clear_metadata_cache'),'Cache clear not requested');
         button('← Back to stations').click();await wait(30);
         assert(!document.querySelector('.dial').classList.contains('banner-row'),'Column layout not applied');
-        assert(document.querySelector('.compact-player'),'Persistent player missing');
+        assert(!document.querySelector('.compact-player'),'Bar visible after returning to player');
         button('MANAGE STATIONS').click();await until(()=>document.querySelector('dialog')?.open,'Manager not modal');
         const rows=document.querySelectorAll('.bulk-row');rows[1].querySelector('input').click();rows[2].querySelector('input').click();await wait(20);
         button('Delete 2 stations').click();await wait(20);assert(!window.__testCalls().includes('delete_stations'),'Bulk removal skipped confirmation');
@@ -161,7 +164,7 @@ app
         assert(document.querySelectorAll('.file-row').length===2,'Dropped files not deduplicated');
         window.__testEmit('audio-drop-start',2);button('Cancel').click();await wait(20);window.__testEmit('audio-drop',{id:2,error:'',tracks:[{path:'late.wav',name:'Late'}]});await wait(20);
         assert(!document.querySelector('dialog'),'Late drop reopened a cancelled editor');
-        return 'UI passed: Electron structure, persistent bar, tags/lyric, editor, group dialogs, volume wheel, autosave/retry, scanlines, banner layout and bulk removal.';
+        return 'UI passed: All Stations-only bar, tags/lyric, editor, group dialogs, volume wheel, autosave/retry, scanlines, banner layout and bulk removal.';
       })()`,
         true,
       );
@@ -184,11 +187,22 @@ app
       await new Promise((r) => setTimeout(r, 100));
       console.log(
         await window.webContents.executeJavaScript(
-          `(()=>{if(document.querySelector('.deck').scrollWidth>document.querySelector('.deck').clientWidth)throw new Error('Player overflows minimum window');if(document.querySelector('.compact-player').getBoundingClientRect().bottom>innerHeight)throw new Error('Bottom bar out of view');return 'Responsive player and bottom bar fit 760 × 560';})()`,
+          `(()=>{if(document.querySelector('.deck').scrollWidth>document.querySelector('.deck').clientWidth)throw new Error('Player overflows minimum window');if(document.querySelector('.compact-player'))throw new Error('Bar visible on small player screen');return 'Responsive player fits 760 × 560';})()`,
         ),
       );
       fs.writeFileSync(
         path.join(output, 'ui-player-small.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.back-stations').click()`,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      await window.webContents.executeJavaScript(
+        `(()=>{const bar=document.querySelector('.compact-player');if(!bar||bar.getBoundingClientRect().bottom>innerHeight)throw new Error('All Stations bar missing or outside viewport');})()`,
+      );
+      fs.writeFileSync(
+        path.join(output, 'ui-home-playing-small.png'),
         (await window.webContents.capturePage()).toPNG(),
       );
       window.setContentSize(480, 160);

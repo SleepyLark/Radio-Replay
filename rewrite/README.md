@@ -257,3 +257,17 @@ existing artwork/font/playback/mini/tray integration checks.
 Windows is the validated platform. Linux/macOS still need target-platform checks;
 WebView font rasterization and window decorations may differ. Native OS file-picker
 appearance is platform controlled. These do not prevent copying the Electron UI.
+
+## Preview 0.3.1: browsing bar and continuous tuning static
+
+- The bottom now-playing bar appears only on All Stations after a station has
+  been tuned. It is hidden on the initial empty home screen, player and Settings.
+  Opening the player from the bar preserves the broadcast.
+- The transition timer is a minimum delay, not the static's lifetime. Static loops
+  through file preparation, metadata loading, decoding and player startup; it stops
+  once the station is ready or tuning is cancelled/fails. Disabling the optional
+  transition delay still permits loading-only static. Disable the sound separately
+  with the tuning sound's Disable button.
+- Regression coverage includes slow preparation/startup, zero delay, loading-only
+  mode, mute/volume and stale tune completion. The real-audio smoke uses a short
+  WAV to verify looping beyond the clip duration while preparation is pending.
