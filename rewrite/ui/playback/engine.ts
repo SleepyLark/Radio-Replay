@@ -79,6 +79,7 @@ export class Playback {
   } | null = null;
   private advancing = false;
   private noise: HTMLAudioElement | null = null;
+  private cacheWriteFailed = false;
   private timer: ReturnType<typeof setInterval>;
   constructor(options: PlaybackOptions) {
     this.options = options;
@@ -135,6 +136,7 @@ export class Playback {
     this.controller.abort();
     this.controller = new AbortController();
     this.wantPlay = false;
+    this.cacheWriteFailed = false;
     this.stopSources();
     this.clock = null;
     this.advancing = false;
@@ -213,7 +215,11 @@ export class Playback {
       await this.ready(element, signal);
       const duration = element.duration;
       this.durations.set(key, duration);
-      void this.options.rememberDuration?.(stationKey, track, duration).catch(() => {});
+      try {
+        await this.options.rememberDuration?.(stationKey, track, duration);
+      } catch {
+        if (!signal.aborted && this.state.key === stationKey) this.cacheWriteFailed = true;
+      }
       if (this.durations.size > 20000) this.durations.delete(this.durations.keys().next().value!);
       return duration;
     } catch (e) {
@@ -336,7 +342,14 @@ export class Playback {
       this.index = at.index;
       const skipped = station.tracks.length - playable.length;
       this.emit({
-        error: skipped > 0 ? `${skipped} unavailable or unsupported track(s) skipped.` : '',
+        error: [
+          skipped > 0 ? `${skipped} unavailable or unsupported track(s) skipped.` : '',
+          this.cacheWriteFailed
+            ? 'Durations could not be saved. Playback can continue; clear the metadata cache in Settings to retry.'
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
       });
       if (
         station.mode === 'longset' &&

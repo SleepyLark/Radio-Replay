@@ -28,9 +28,13 @@ fieldset {
   flex: 1;
   min-height: 0;
   height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 .shell aside {
   height: 100%;
+  min-height: 0;
+  grid-column: 1;
+  grid-row: 1 / -1;
 }
 .brand {
   border: 0;
@@ -70,6 +74,9 @@ fieldset {
   height: 100%;
   overflow: auto;
   overscroll-behavior: contain;
+  min-height: 0;
+  grid-column: 2;
+  grid-row: 1;
 }
 .deck > * {
   flex: none;
@@ -111,6 +118,22 @@ fieldset {
 }
 .controls {
   flex: none;
+}
+.control-icon {
+  display: block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+.transport-buttons button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.compact-controls .control-icon {
+  width: 18px;
+  height: 18px;
 }
 .controls .play:hover {
   color: var(--green);
@@ -246,7 +269,13 @@ dialog .error {
 
 .compact-player {
   flex: none;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.2fr);
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: now-playing;
   align-items: center;
   gap: 28px;
   padding: 12px 24px;
@@ -257,7 +286,7 @@ dialog .error {
 .compact-title {
   flex: 1;
   min-width: 0;
-  max-width: 35%;
+  max-width: 100%;
   padding: 0;
   color: var(--ink);
   border: 0;
@@ -404,6 +433,11 @@ dialog .error {
 }
 .mini-controls button {
   font-size: 16px;
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
 }
 .mini-controls input {
   width: 100px;
@@ -438,24 +472,26 @@ dialog .error {
     justify-self: end;
   }
 }
-@media (max-width: 850px) {
-  .compact-title {
-    max-width: 40%;
-  }
-  .compact-controls .recording-timeline,
+@container now-playing (max-width: 760px) {
   .compact-controls .volume-module {
+    display: none;
+  }
+  .compact-controls {
+    grid-template-columns: auto minmax(60px, 1fr);
+  }
+}
+@container now-playing (max-width: 560px) {
+  .compact-controls .recording-timeline {
     display: none;
   }
   .compact-controls {
     display: flex;
     justify-content: flex-end;
   }
+}
+@media (max-width: 850px) {
   .compact-player {
-    gap: 16px;
-    padding: 12px 20px;
-  }
-  .compact-title {
-    max-width: none;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 @media (max-width: 760px) {

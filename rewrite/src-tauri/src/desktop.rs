@@ -300,7 +300,7 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
                         .settings
                         .get("closeToTray")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true)
+                        .unwrap_or(false)
                 })
                 .unwrap_or(false);
             if close_to_tray && desktop.tray_ready.load(Ordering::Relaxed) {

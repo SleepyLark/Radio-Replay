@@ -7,7 +7,7 @@
   let category=$state('General'), status=$state(''), error=$state(''), busy=$state(false);
   let accent=$state(String(initial.accent??'#c7f464'));
   let fade=$state(fadeSeconds({key:'',station:'',tracks:[],mode:'tracks'},initial)*1000);
-  let randomNext=$state(initial.randomNext===true), showProgress=$state(initial.showProgress!==false), reduceMotion=$state(initial.reduceMotion===true), closeToTray=$state(initial.closeToTray!==false);
+  let randomNext=$state(initial.randomNext===true), showProgress=$state(initial.showProgress!==false), reduceMotion=$state(initial.reduceMotion===true), closeToTray=$state(initial.closeToTray===true);
   let density=$state(initial.listDensity==='compact'?'compact':'comfortable'), layout=$state(initial.bannerLayout==='column'?'column':'row');
   let scanlines=$state(initial.showScanlines!==false), matchBanner=$state(initial.matchBannerAccent!==false), bounceSpeed=$state(Number(initial.bounceSpeed)||25);
   let tuningTransition=$state(initial.tuningTransition!==false), tuningMinMs=$state(Number(initial.tuningMinMs)||0), tuningMaxMs=$state(Number(initial.tuningMaxMs??1500)), staticPath=$state(initial.staticPath==='off'?'':String(initial.staticPath??'bundled'));

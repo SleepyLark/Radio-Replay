@@ -54,6 +54,42 @@ void (async () => {
         'Fixture library did not load',
       );
       Math.random = () => 0;
+      const uncached = await invoke('prepare_station', { key: 'a', group: 'all' });
+      await invoke('native_smoke_report', {
+        phase: 'startupCache',
+        ok: true,
+        message: `${uncached.filter((track) => track.duration > 0).length}/${uncached.length} cached durations before probing`,
+      });
+      const measured = uncached[0];
+      await invoke('remember_duration', {
+        key: 'a',
+        path: measured.path,
+        size: measured.size,
+        modified: measured.modified,
+        duration: 10,
+      });
+      await invoke('native_smoke_report', {
+        phase: 'cacheReopen',
+        ok: true,
+        message: 'Reopening SQLite after duration write through native IPC',
+      });
+      const warm = await invoke('prepare_station', { key: 'a', group: 'all' });
+      assert(warm[0].duration === 10, 'Duration write did not survive native IPC');
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === '⚙ Settings')
+        .click();
+      await until(() => !!document.querySelector('#settingsView'), 'Settings did not open');
+      const trayChoice = [...document.querySelectorAll('label')]
+        .find((l) => l.textContent.includes('Keep playing in the tray'))
+        .querySelector('input');
+      assert(!trayChoice.checked, 'Close-to-tray default is enabled');
+      trayChoice.click();
+      await until(
+        () => document.querySelector('#settingsView [role="status"]')?.textContent === 'Saved',
+        'Tray opt-in did not save',
+      );
+      document.querySelector('.settings-back').click();
+      await until(() => !!document.querySelector('#homeView'), 'Home did not return');
       assert(!document.querySelector('.compact-player'), 'Bar visible before tuning');
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
       document.querySelector('.station').click();
@@ -64,6 +100,13 @@ void (async () => {
       assert(!document.querySelector('.compact-player'), 'Bar visible on player screen');
       document.querySelector('.back-stations').click();
       await until(() => !!document.querySelector('.compact-player'), 'Bar missing on All Stations');
+      const bar = document.querySelector('.compact-player').getBoundingClientRect(),
+        sidebar = document.querySelector('aside').getBoundingClientRect();
+      assert(Math.abs(bar.left - sidebar.right) < 2, 'Bar extends beneath sidebar');
+      assert(
+        document.querySelector('[aria-label="Pause"] svg rect'),
+        'Pause is not an SVG control',
+      );
       document.querySelector('.compact-title').click();
       await until(() => !!document.querySelector('.radio-screen'), 'Bar did not reopen player');
       assert(!document.querySelector('.compact-player'), 'Bar remained on reopened player');
@@ -154,6 +197,7 @@ void (async () => {
       await wait(800);
       const final = await invoke('desktop_snapshot');
       assert(Math.abs(final.volume - 0.25) < 0.001, 'Mini volume did not persist');
+      await invoke('save_settings', { patch: { closeToTray: false } });
       await invoke('native_smoke_report', {
         phase: 'complete',
         ok: true,

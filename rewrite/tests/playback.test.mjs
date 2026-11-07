@@ -145,6 +145,29 @@ test('persisted durations bypass probes and new measurements are sent to the cac
     player.dispose();
   }
 });
+test('duration writes finish before tune completes, and failures remain visible without blocking playback', async () => {
+  const { player } = setup({ prepare: async () => [track('a')] });
+  let finishWrite;
+  player.options.rememberDuration = () => new Promise((resolve) => (finishWrite = resolve));
+  try {
+    const tuning = player.tune(station('persist', [track('a')]));
+    await flush();
+    assert.ok(finishWrite);
+    assert.equal(player.state.loading, true);
+    finishWrite();
+    await tuning;
+    assert.equal(player.state.playing, true);
+    player.invalidate();
+    player.options.rememberDuration = async () => {
+      throw new Error('Storage unavailable');
+    };
+    await player.tune(station('failed-cache', [track('a')]));
+    assert.equal(player.state.playing, true);
+    assert.match(player.state.error, /Durations could not be saved/);
+  } finally {
+    player.dispose();
+  }
+});
 test('each group retains its own station clock', async () => {
   const { player, setNow } = setup();
   const s = station('same', [track('a'), track('b')]);

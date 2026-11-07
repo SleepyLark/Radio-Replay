@@ -33,8 +33,10 @@ pub struct PlayableTrack {
     #[serde(flatten)]
     pub track: Track,
     pub size: u64,
-    pub modified: u128,
+    pub modified: u64,
     pub duration: Option<f64>,
+    #[serde(skip)]
+    pub cache_signature: Option<String>,
 }
 
 /// Resolve only tracks belonging to a saved station; missing files are skipped.
@@ -69,8 +71,9 @@ pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, 
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis())
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
                 .unwrap_or(0),
+            cache_signature: crate::metadata::Cache::signature_from_metadata(&meta),
         });
     }
     Ok(files)

@@ -271,3 +271,32 @@ appearance is platform controlled. These do not prevent copying the Electron UI.
 - Regression coverage includes slow preparation/startup, zero delay, loading-only
   mode, mute/volume and stale tune completion. The real-audio smoke uses a short
   WAV to verify looping beyond the clip duration while preparation is pending.
+
+## Preview 0.3.2: durable duration cache and control polish
+
+- Fixes the actual native duration-write failure: the Tauri command's `modified`
+  argument used `u128`, which its IPC deserializer rejects. Modification timestamps
+  now use `u64` milliseconds, and full file signatures still guard against changed
+  audio. Browser-measured durations are saved before tuning completes. A failed
+  write produces a playback notice rather than silently losing the cache.
+- Retains the existing SQLite database and valid rows. Files whose durations were
+  never written by older previews need one measurement pass; subsequent launches
+  reuse them. Clearing the cache is unnecessary when upgrading.
+- Warm station preparation reuses the file signatures collected while resolving
+  audio, one prepared SQLite statement, and read-only lookups. It no longer updates
+  an access timestamp for every track. Cache inserts use WAL with NORMAL syncing;
+  table-size maintenance runs periodically rather than counting every insert.
+  The `used` stamp reflects the last cache write for approximate eviction order.
+- The All Stations now-playing bar spans only the content pane. The sidebar keeps
+  its full height, and controls adapt to the available pane width.
+- Play/pause, station navigation and speaker controls use a shared SVG component
+  in the main player, bottom bar and mini window. The speaker retains the original
+  Electron paths; pause no longer depends on a Roman-numeral font glyph.
+- Close-to-tray is off by default in both Settings and the native close handler.
+  Users can explicitly enable it. Closing the main window otherwise exits.
+
+Native smoke now checks duration writes through the actual IPC bridge, reopening
+the SQLite connection, and cached durations before probing on a second process
+launch. It also checks the default checkbox, explicit tray opt-in, sidebar-aligned
+bar and a real close event that must terminate the process. Run the smoke twice
+against the same `out/native-smoke` directory to test process-restart persistence.

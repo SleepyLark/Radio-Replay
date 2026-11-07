@@ -88,6 +88,7 @@ app
         const until=async(test,message)=>{for(let i=0;i<100;i++){if(test())return;await wait(40);}throw new Error(message);};
         const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
         const label=text=>[...document.querySelectorAll('label')].find(l=>l.textContent.includes(text));
+        const checkBar=()=>{const bar=document.querySelector('.compact-player'),side=document.querySelector('aside').getBoundingClientRect(),box=bar.getBoundingClientRect();assert(Math.abs(box.left-side.right)<2,'Bar extends under sidebar');assert(Math.abs(box.right-innerWidth)<2&&Math.abs(box.bottom-innerHeight)<2,'Bar does not fill bottom of content pane');assert(Math.abs(side.bottom-innerHeight)<2,'Sidebar no longer spans full app height');assert(bar.scrollWidth<=bar.clientWidth,'Bar controls overflow');};
         Math.random=()=>0;
         assert(!document.querySelector('.compact-player'),'Bar visible before tuning');
         document.querySelector('.home-station').click();
@@ -95,10 +96,12 @@ app
         assert(document.querySelector('.lyrics .current')?.textContent==='Opening lyric','Synced lyric missing');
         assert(!document.querySelector('#homeView'),'Home remains in player');
         assert(!document.querySelector('.compact-player'),'Bottom bar visible on player');
+        assert(document.querySelectorAll('[aria-label="Pause"] svg rect').length===2,'Pause is not a two-bar SVG icon');
+        assert(document.querySelector('[aria-label="Mute"] svg g'),'Speaker SVG missing');
         assert(getComputedStyle(document.querySelector('.signal')).color==='rgb(255, 136, 0)','Saved accent not applied');
         await wait(200);
         assert(window.__testCalls().filter(c=>c==='track_details').length===1,'Metadata fetched on progress ticks');
-        button('← All Stations').click();await wait(30);assert(document.querySelector('.compact-player'),'Bar missing after returning to All Stations');document.querySelector('.compact-title').click();await wait(30);assert(!document.querySelector('.compact-player'),'Bar remained after reopening player');
+        button('← All Stations').click();await wait(30);assert(document.querySelector('.compact-player'),'Bar missing after returning to All Stations');checkBar();document.querySelector('.compact-title').click();await wait(30);assert(!document.querySelector('.compact-player'),'Bar remained after reopening player');
         button('← All Stations').click();await wait(30);document.querySelector('.home-station').click();await wait(60);
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===1,'Returning to player restarted audio');
         button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Editor not modal');
@@ -127,7 +130,7 @@ app
         assert(document.querySelectorAll('.sidebar-station').length===1,'Group filter did not apply');
         document.querySelector('.sidebar-station').click();await until(()=>document.querySelector('[aria-label="Pause"]'),'Group did not play');
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===2,'Group station did not retune');
-        button('⚙ Settings').click();await wait(30);button('Appearance').click();await wait(20);
+        button('⚙ Settings').click();await wait(30);assert(!label('Keep playing in the tray').querySelector('input').checked,'Close-to-tray starts enabled');button('Appearance').click();await wait(20);
         assert(!document.querySelector('.compact-player'),'Bar visible in Settings');
         label('Show recording progress').querySelector('input').click();
         await until(()=>window.__testSettings().showProgress===false,'Setting did not autosave');
@@ -174,6 +177,18 @@ app
         path.join(output, 'ui-player.png'),
         (await window.webContents.capturePage()).toPNG(),
       );
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.back-stations').click()`,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      fs.writeFileSync(
+        path.join(output, 'ui-home-playing.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.compact-title').click()`,
+      );
+      await new Promise((r) => setTimeout(r, 30));
       await window.webContents.executeJavaScript(`document.querySelector('.edit-link').click()`);
       await new Promise((r) => setTimeout(r, 100));
       fs.writeFileSync(
@@ -199,7 +214,7 @@ app
       );
       await new Promise((r) => setTimeout(r, 50));
       await window.webContents.executeJavaScript(
-        `(()=>{const bar=document.querySelector('.compact-player');if(!bar||bar.getBoundingClientRect().bottom>innerHeight)throw new Error('All Stations bar missing or outside viewport');})()`,
+        `(()=>{const bar=document.querySelector('.compact-player'),side=document.querySelector('aside').getBoundingClientRect();if(!bar||bar.getBoundingClientRect().bottom>innerHeight)throw new Error('All Stations bar missing or outside viewport');if(Math.abs(bar.getBoundingClientRect().left-side.right)>1||bar.scrollWidth>bar.clientWidth)throw new Error('Bar overlaps sidebar or overflows narrow pane');})()`,
       );
       fs.writeFileSync(
         path.join(output, 'ui-home-playing-small.png'),

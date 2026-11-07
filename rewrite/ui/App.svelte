@@ -160,11 +160,11 @@
         </div>
       {:else}<Settings {config} onsaved={preferencesSaved} oncachecleared={()=>player?.clearCache()} onback={()=>showView(active?'Player':'Stations')} onerror={message=>error=message}/>{/if}
     </section>
-  </main>
   {#if view==='Stations' && playback?.key}<footer class="compact-player">
     <button class="compact-title" onclick={()=>showView(active?'Player':'Stations')}><span class="now-icon">{#if artworkUrl(config.logos[playback?.key??''])}<img src={artworkUrl(config.logos[playback?.key??''])} alt=""/>{:else}◉{/if}</span><span><strong>{playingStation?.station??'Nothing tuned yet'}</strong><small>{displayTitle||'Choose a station to tune in'}</small></span></button>
     <RadioControls {playback} enabled={desktop&&lineup.length>0} showProgress={config.settings.showProgress!==false} {toggle} {step} mute={()=>player?.mute()} volume={value=>player?.setVolume(value)} compact/>
   </footer>{/if}
+  </main>
 </div>
 {#if editing}{#key editTarget?.key}<StationEditor station={editTarget} logo={editTarget?config.logos[editTarget.key]:''} settings={config.settings} incoming={droppedTracks} onsaved={saved} oncancel={()=>editing=false}/>{/key}{/if}
 {#if groupDraft!==undefined}<Groups {config} group={groupDraft} onsaved={groupSaved} oncancel={()=>groupDraft=undefined}/>{/if}

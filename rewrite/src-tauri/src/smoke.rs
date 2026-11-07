@@ -17,13 +17,7 @@ pub(crate) struct Smoke {
 pub fn active() -> bool {
     std::env::var_os("RADIO_REPLAY_NATIVE_SMOKE_DIR").is_some()
 }
-fn report(app: &tauri::AppHandle, ok: bool, message: &str) {
-    let Some(smoke) = app.try_state::<Smoke>() else {
-        return;
-    };
-    if smoke.finished.swap(true, Ordering::Relaxed) {
-        return;
-    }
+fn write_result(app: &tauri::AppHandle, smoke: &Smoke, ok: bool, message: &str) {
     let (tray, media) = super::desktop::smoke_status(app);
     let value = serde_json::json!({"passed":ok,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
     let _ = std::fs::write(
@@ -31,6 +25,15 @@ fn report(app: &tauri::AppHandle, ok: bool, message: &str) {
         serde_json::to_vec_pretty(&value).unwrap(),
     );
     println!("Native smoke: {value}");
+}
+fn report(app: &tauri::AppHandle, ok: bool, message: &str) {
+    let Some(smoke) = app.try_state::<Smoke>() else {
+        return;
+    };
+    if smoke.finished.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    write_result(app, &smoke, ok, message);
     app.state::<super::desktop::Desktop>().mark_quitting();
     app.exit(if ok { 0 } else { 1 });
 }
@@ -63,7 +66,11 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
     let mut tracks = Vec::new();
     for i in 0..2 {
         let file = directory.join(format!("fixture-{i}.wav"));
-        std::fs::write(&file, &wav)?;
+        // Keep unchanged audio signatures across launches so a second process can
+        // verify that the duration cache is truly persistent.
+        if std::fs::read(&file).ok().as_deref() != Some(wav.as_slice()) {
+            std::fs::write(&file, &wav)?;
+        }
         std::fs::write(
             file.with_extension("lrc"),
             "[00:00]Native opening lyric\n[00:05]Native later lyric",
@@ -99,7 +106,6 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
         .settings
         .insert("tuningTransition".into(), false.into());
     config.settings.insert("crossfade".into(), 0.into());
-    config.settings.insert("closeToTray".into(), true.into());
     ConfigStore::new(directory.join("stations.json")).save(&config)?;
     app.manage(Smoke {
         directory: directory.clone(),
@@ -155,6 +161,12 @@ pub fn native_smoke_report(
     if phase == "closeToTray" && window.label() == "main" {
         window.close().map_err(|e| e.to_string())?;
     }
+    if phase == "cacheReopen" && window.label() == "main" {
+        let cache = app.state::<super::MetadataCache>();
+        *cache.0.lock().map_err(|e| e.to_string())? = radio_replay_core::metadata::Cache::open(
+            &smoke.directory.join("metadata-cache.sqlite"),
+        );
+    }
     if phase == "drop" && window.label() == "main" {
         super::drops::on_window_event(
             &window.as_ref().window(),
@@ -172,11 +184,29 @@ pub fn native_smoke_report(
     }
     if phase == "complete" && window.label() == "main" {
         let (tray, media) = super::desktop::smoke_status(&app);
-        report(
-            &app,
-            smoke.mini_done.load(Ordering::Relaxed) && tray && media,
-            "WebView2 playback, mini controls, restore, tray and native media initialization",
-        );
+        let config = app
+            .state::<super::Library>()
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .load()?;
+        let closes_to_tray = config
+            .settings
+            .get("closeToTray")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if smoke.mini_done.load(Ordering::Relaxed) && tray && media && !closes_to_tray {
+            // The runner must observe this process exiting after the real close
+            // event. If it hides instead, the watchdog overwrites this as failed.
+            write_result(&app,&smoke,true,"SQLite restart, app close, WebView2 playback, mini controls, tray and native media verified");
+            window.close().map_err(|e| e.to_string())?;
+        } else {
+            report(
+                &app,
+                false,
+                "Native integration or exit-on-close precondition failed",
+            );
+        }
     }
     Ok(())
 }

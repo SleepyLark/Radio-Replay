@@ -52,7 +52,7 @@ async fn remember_duration(
     key: String,
     path: String,
     size: u64,
-    modified: u128,
+    modified: u64,
     duration: f64,
 ) -> Result<(), String> {
     let track = saved_audio(&library, &key, &path)?;
@@ -61,12 +61,13 @@ async fn remember_duration(
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis())
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     if track.size != size
         || track.modified != modified
         || current.len() != size
         || stamp != modified
+        || metadata::Cache::signature_from_metadata(&current) != track.cache_signature
     {
         return Err("Audio changed during probing".into());
     }
@@ -290,11 +291,7 @@ async fn prepare_station(
     let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
     let mut tracks = library::playback_files_for_group(config, &key, group.as_deref())?;
     let metadata = cache.0.lock().map_err(|e| e.to_string())?;
-    for track in &mut tracks {
-        track.duration = metadata
-            .peek(Path::new(&track.track.path))
-            .and_then(|m| m.duration);
-    }
+    metadata.populate_durations(&mut tracks);
     for track in &tracks {
         app.asset_protocol_scope()
             .allow_file(&track.track.path)

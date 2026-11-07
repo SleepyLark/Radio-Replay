@@ -4,6 +4,7 @@ use lofty::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::{fs, io::Read, path::Path};
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -23,12 +24,15 @@ pub struct Details {
 pub struct Cache {
     db: Option<Connection>,
     path: std::path::PathBuf,
+    writes: Cell<usize>,
 }
 impl Cache {
     pub fn open(path: &Path) -> Self {
         let db = (|| -> rusqlite::Result<Connection> {
             let db = Connection::open(path)?;
-            db.execute_batch("PRAGMA cache_size=-2048; PRAGMA mmap_size=0;
+            db.busy_timeout(std::time::Duration::from_secs(2))?;
+            db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+                PRAGMA cache_size=-2048; PRAGMA mmap_size=0;
                 CREATE TABLE IF NOT EXISTS metadata_v1(path TEXT PRIMARY KEY, signature TEXT NOT NULL, value TEXT NOT NULL, used INTEGER NOT NULL);
                 CREATE INDEX IF NOT EXISTS metadata_used ON metadata_v1(used);")?;
             Ok(db)
@@ -36,6 +40,7 @@ impl Cache {
         Self {
             db,
             path: path.to_path_buf(),
+            writes: Cell::new(0),
         }
     }
     pub fn clear(&mut self) -> Result<(), String> {
@@ -57,6 +62,9 @@ impl Cache {
     }
     fn signature(path: &Path) -> Option<String> {
         let meta = fs::metadata(path).ok()?;
+        Self::signature_from_metadata(&meta)
+    }
+    pub fn signature_from_metadata(meta: &fs::Metadata) -> Option<String> {
         let modified = meta
             .modified()
             .ok()?
@@ -72,46 +80,72 @@ impl Cache {
         let change = format!("{:?}", meta.created().ok());
         Some(format!("{}:{modified}:{change}", meta.len()))
     }
-    fn put(&self, path: &Path, signature: &str, value: &Metadata) {
-        if let Some(db) = &self.db {
-            if let Ok(json) = serde_json::to_string(value) {
-                let _ = db.execute(
-                    "INSERT OR REPLACE INTO metadata_v1 VALUES(?1,?2,?3,unixepoch())",
-                    params![path.to_string_lossy(), signature, json],
-                );
-                if db
-                    .query_row("SELECT COUNT(*) FROM metadata_v1", [], |row| {
-                        row.get::<_, i64>(0)
-                    })
-                    .unwrap_or(0)
-                    > 20000
-                {
-                    let _ = db.execute("DELETE FROM metadata_v1 WHERE rowid IN (SELECT rowid FROM metadata_v1 ORDER BY used ASC,rowid ASC LIMIT 1000)", []);
-                }
+    fn put(&self, path: &Path, signature: &str, value: &Metadata) -> Result<(), String> {
+        let db = self.db.as_ref().ok_or("Duration cache is unavailable")?;
+        let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
+        db.prepare_cached("INSERT OR REPLACE INTO metadata_v1 VALUES(?1,?2,?3,unixepoch())")
+            .and_then(|mut statement| {
+                statement.execute(params![path.to_string_lossy(), signature, json])
+            })
+            .map_err(|e| e.to_string())?;
+        self.writes.set(self.writes.get() + 1);
+        // Amortize maintenance rather than counting the table for every measured file.
+        if self.writes.get() % 256 == 0 {
+            if db
+                .query_row("SELECT COUNT(*) FROM metadata_v1", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap_or(0)
+                > 20000
+            {
+                let _ = db.execute("DELETE FROM metadata_v1 WHERE rowid IN (SELECT rowid FROM metadata_v1 ORDER BY used ASC,rowid ASC LIMIT 1000)", []);
             }
         }
+        Ok(())
     }
     pub fn peek(&self, path: &Path) -> Option<Metadata> {
         let signature = Self::signature(path)?;
         if let Some(db) = &self.db {
             let cached: Option<String> = db
-                .query_row(
-                    "SELECT value FROM metadata_v1 WHERE path=?1 AND signature=?2",
-                    params![path.to_string_lossy(), signature],
-                    |row| row.get(0),
-                )
+                .prepare_cached("SELECT value FROM metadata_v1 WHERE path=?1 AND signature=?2")
+                .and_then(|mut statement| {
+                    statement
+                        .query_row(params![path.to_string_lossy(), signature], |row| row.get(0))
+                })
                 .optional()
                 .ok()
                 .flatten();
             if let Some(value) = cached.and_then(|s| serde_json::from_str(&s).ok()) {
-                let _ = db.execute(
-                    "UPDATE metadata_v1 SET used=unixepoch() WHERE path=?1",
-                    params![path.to_string_lossy()],
-                );
                 return Some(value);
             }
         }
         None
+    }
+    /// A station's files have already been statted and canonicalized. Reuse those
+    /// signatures and one prepared read-only statement; warm tuning performs no writes.
+    pub fn populate_durations(&self, tracks: &mut [crate::library::PlayableTrack]) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        let Ok(mut statement) =
+            db.prepare_cached("SELECT value FROM metadata_v1 WHERE path=?1 AND signature=?2")
+        else {
+            return;
+        };
+        for track in tracks {
+            let Some(signature) = &track.cache_signature else {
+                continue;
+            };
+            let value: Option<String> = statement
+                .query_row(params![track.track.path, signature], |row| row.get(0))
+                .optional()
+                .ok()
+                .flatten();
+            track.duration = value
+                .and_then(|json| serde_json::from_str::<Metadata>(&json).ok())
+                .and_then(|m| m.duration)
+                .filter(|n| n.is_finite() && *n > 0.0);
+        }
     }
     pub fn read(&self, path: &Path) -> Metadata {
         let Some(signature) = Self::signature(path) else {
@@ -138,7 +172,7 @@ impl Cache {
             }
         }
         if Self::signature(path).as_deref() == Some(signature.as_str()) {
-            self.put(path, &signature, &value);
+            let _ = self.put(path, &signature, &value);
         }
         value
     }
@@ -150,7 +184,9 @@ impl Cache {
         let mut value = self.peek(path).unwrap_or_default();
         value.duration = Some(seconds);
         if Self::signature(path).as_deref() == Some(signature.as_str()) {
-            self.put(path, &signature, &value);
+            self.put(path, &signature, &value)?;
+        } else {
+            return Err("Audio changed while caching its duration".into());
         }
         Ok(())
     }
@@ -234,6 +270,65 @@ mod tests {
         cache.clear().unwrap();
         assert_eq!(cache.read(&audio).duration, None);
         assert!(cache.remember_duration(&audio, f64::NAN).is_err());
+    }
+    #[test]
+    fn prepared_station_reuses_persisted_durations_read_only_after_database_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("song.mp3");
+        fs::write(&audio, b"fixture").unwrap();
+        let mut config = crate::Config::default();
+        config.custom.push(crate::Station {
+            key: "station".into(),
+            station: "Station".into(),
+            tracks: vec![crate::Track {
+                path: audio.to_string_lossy().into_owned(),
+                name: "Song".into(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        });
+        let db = dir.path().join("cache.sqlite");
+        let prepared = crate::library::playback_files(&config, "station").unwrap();
+        {
+            let cache = Cache::open(&db);
+            cache
+                .remember_duration(Path::new(&prepared[0].track.path), 42.0)
+                .unwrap();
+        }
+        let cache = Cache::open(&db);
+        let changes = cache.db.as_ref().unwrap().total_changes();
+        let started = std::time::Instant::now();
+        // A large warm lineup must reuse the stored value without touching the DB.
+        let mut warm = vec![prepared[0].clone(); 5000];
+        cache.populate_durations(&mut warm);
+        assert!(warm.iter().all(|track| track.duration == Some(42.0)));
+        assert_eq!(cache.db.as_ref().unwrap().total_changes(), changes);
+        assert_eq!(
+            cache
+                .peek(Path::new(&prepared[0].track.path))
+                .unwrap()
+                .duration,
+            Some(42.0)
+        );
+        assert_eq!(cache.db.as_ref().unwrap().total_changes(), changes);
+        println!(
+            "5000 cached duration lookups after reopen: {:?}",
+            started.elapsed()
+        );
+        fs::write(&audio, b"changed fixture").unwrap();
+        let mut changed = crate::library::playback_files(&config, "station").unwrap();
+        cache.populate_durations(&mut changed);
+        assert_eq!(changed[0].duration, None);
+    }
+    #[test]
+    fn unavailable_cache_reports_failed_duration_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("cache.sqlite");
+        fs::create_dir(&db).unwrap();
+        let audio = dir.path().join("song.mp3");
+        fs::write(&audio, b"fixture").unwrap();
+        let cache = Cache::open(&db);
+        assert!(cache.remember_duration(&audio, 42.0).is_err());
     }
     #[test]
     fn sidecars_prefer_lrc_and_bound_reads() {
