@@ -8,6 +8,8 @@ pub struct Snapshot {
     pub artist: String,
     pub album: String,
     pub art: String,
+    pub banner: String,
+    pub banner_color: String,
     pub accent: String,
     pub playing: bool,
     pub has_station: bool,
@@ -25,6 +27,8 @@ impl Snapshot {
             &self.artist,
             &self.album,
             &self.art,
+            &self.banner,
+            &self.banner_color,
         ]
         .iter()
         .any(|s| s.len() > 16384)

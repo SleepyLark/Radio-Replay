@@ -39,6 +39,8 @@ let snapshot = {
   artist: 'Fixture artist',
   album: 'Fixture album',
   art: '',
+  banner: location.origin + '/fixture-banner.svg',
+  bannerColor: '#244b42',
   accent: '#ff8800',
   playing: true,
   hasStation: true,

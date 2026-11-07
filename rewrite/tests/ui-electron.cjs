@@ -26,6 +26,13 @@ wav.writeUInt16LE(16, 34);
 wav.write('data', 36);
 wav.writeUInt32LE(samples * 2, 40);
 const server = http.createServer((req, res) => {
+  if (req.url.split('?')[0] === '/fixture-banner.svg') {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.end(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400"><defs><linearGradient id="sky" x2="1" y2=".4"><stop stop-color="#173d37"/><stop offset=".55" stop-color="#7e9d69"/><stop offset="1" stop-color="#19374b"/></linearGradient></defs><rect width="1200" height="400" fill="url(#sky)"/><circle cx="920" cy="105" r="110" fill="#e4d49d"/><path d="M0 310 210 180 410 290 650 130 920 290 1200 190v210H0Z" fill="#173c36"/><path d="M0 365 350 265 700 360 1030 230 1200 295v105H0Z" fill="#0d2226"/></svg>',
+    );
+    return;
+  }
   if (req.url === '/fixture.wav') {
     res.setHeader('Content-Type', 'audio/wav');
     res.end(wav);
@@ -228,12 +235,32 @@ app
         const wait=ms=>new Promise(r=>setTimeout(r,ms));const assert=(ok,message)=>{if(!ok)throw new Error(message);};
         for(let i=0;i<100&&!document.querySelector('.mini-titles strong')?.textContent.includes('Fixture Radio');i++)await wait(50);
         assert(document.querySelector('.mini-titles strong')?.textContent==='Fixture Radio','Mini snapshot not displayed');
+        for(let i=0;i<100&&!document.querySelector('.mini-banner')?.naturalWidth;i++)await wait(30);
+        assert(document.querySelector('.mini-banner')?.naturalWidth>0,'Mini banner did not load');
+        assert(document.querySelector('.mini-banner').src.endsWith('/fixture-banner.svg'),'Mini background uses wrong image');
+        assert(document.querySelectorAll('.volume-segments i').length===12&&document.querySelectorAll('.volume-segments .lit').length===10,'Shared stepped volume not displayed');
+        assert(document.querySelector('[aria-label="Playback time"]').textContent==='00:05 / 00:30','Mini elapsed/total time missing');
+        const time=document.querySelector('[aria-label="Playback time"]').getBoundingClientRect(),bar=document.querySelector('progress').getBoundingClientRect();
+        assert(time.left>bar.right&&time.bottom<=innerHeight&&time.right<=innerWidth,'Time is not beside progress at bottom right');
         assert(!window.__testCalls().includes('load_config')&&!window.__testCalls().includes('prepare_station'),'Mini started another library or audio engine');
         document.querySelector('[aria-label="Pause"]').click();document.querySelector('[aria-label="Next station"]').click();
         const volume=document.querySelector('input[type="range"]');volume.value='.4';volume.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[aria-label="Restore main window"]').click();await wait(100);
         const commands=window.__testMessages();assert(commands.some(c=>c.type==='toggle')&&commands.some(c=>c.type==='next')&&commands.some(c=>c.type==='volume'&&c.value===.4),'Mini commands not forwarded');assert(window.__testCalls().includes('desktop_restore'),'Restore not requested');
         assert(document.querySelector('.mini-player').getBoundingClientRect().height<=innerHeight,'Mini overflows viewport');
-        return 'Mini UI smoke passed: snapshot display, control forwarding, volume, restore, and no duplicate audio engine.';
+        const fixture={station:'Fixture Radio',title:'Embedded song',artist:'Fixture artist',album:'Fixture album',art:'',banner:location.origin+'/fixture-banner.svg',bannerColor:'#244b42',accent:'#ff8800',playing:true,hasStation:true,canNavigate:true,seconds:5,duration:30,volume:.8,muted:false};
+        window.__testEmit('mini-state',{...fixture,station:'Second station',banner:fixture.banner+'?second=1',seconds:3661,duration:7200,volume:.4});await wait(50);
+        assert(document.querySelector('.mini-banner').src.endsWith('?second=1'),'Mini banner did not follow station change');
+        assert(document.querySelector('[aria-label="Playback time"]').textContent==='61:01 / 120:00','Long recording times formatted incorrectly');
+        assert(document.querySelectorAll('.volume-segments .lit').length===5,'Volume segments did not follow snapshot');
+        window.__testEmit('mini-state',{...fixture,muted:true});await wait(30);assert(document.querySelectorAll('.volume-segments .lit').length===0,'Muted volume segments remain lit');
+        document.querySelector('.volume-module').dispatchEvent(new WheelEvent('wheel',{deltaY:-100,bubbles:true,cancelable:true}));await wait(20);
+        assert(window.__testMessages().some(c=>c.type==='volume'&&Math.abs(c.value-.85)<.001),'Volume wheel not forwarded');
+        window.__testEmit('mini-state',{...fixture,banner:location.origin+'/missing-banner.png'});for(let i=0;i<100&&document.querySelector('.mini-banner');i++)await wait(20);
+        assert(!document.querySelector('.mini-banner'),'Broken banner did not fall back');
+        window.__testEmit('mini-state',{...fixture,banner:'',seconds:0,duration:0});await wait(30);assert(!document.querySelector('.mini-banner')&&document.querySelector('[aria-label="Playback time"]').textContent==='00:00 / 00:00','Empty station fallback failed');
+        window.__testEmit('mini-state',fixture);await wait(100);
+        assert(!window.__testCalls().includes('prepare_station'),'Snapshot changes started another audio engine');
+        return 'Mini UI passed: banner/fallback, shared volume steps and wheel, elapsed/total time, snapshot changes, controls, restore and single audio engine.';
       })()`,
           true,
         ),

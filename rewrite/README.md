@@ -300,3 +300,21 @@ the SQLite connection, and cached durations before probing on a second process
 launch. It also checks the default checkbox, explicit tray opt-in, sidebar-aligned
 bar and a real close event that must terminate the process. Run the smoke twice
 against the same `out/native-smoke` directory to test process-restart persistence.
+
+## Preview 0.3.3: mini-player banner, volume and timing
+
+- The mini uses the playing station's banner image as its background, with a dark
+  overlay for readable text. Banner and logo remain separate fields in the desktop
+  snapshot. Missing/broken images fall back to the station's banner color or the
+  default dark background; station changes update the image without starting audio.
+- Main player, All Stations bar and mini now use the same `VolumeControl` component:
+  12 ascending segments, mute, percentage, keyboard-accessible range input and wheel
+  adjustment. Wheel volume is clamped to the native command's valid 0–1 range.
+- The mini shows elapsed / total recording time to the right of its bottom progress
+  bar. Main and mini use the same formatter, including long broadcasts and unknown
+  durations. The native mini remains 480×160.
+
+UI smoke covers a loaded banner, live banner/time/volume changes, mute, volume-wheel
+forwarding, missing-image and empty-duration fallbacks, and footer positioning.
+Native smoke checks the real asset-protocol banner and shared volume updates from
+the main engine. `out/phase5-mini.png` shows the rendered mini with fixture artwork.

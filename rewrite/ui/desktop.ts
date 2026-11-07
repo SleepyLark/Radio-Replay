@@ -6,6 +6,8 @@ export interface DesktopSnapshot {
   artist: string;
   album: string;
   art: string;
+  banner: string;
+  bannerColor: string;
   accent: string;
   playing: boolean;
   hasStation: boolean;
@@ -24,6 +26,8 @@ export const initialSnapshot = (): DesktopSnapshot => ({
   artist: '',
   album: '',
   art: '',
+  banner: '',
+  bannerColor: '',
   accent: '#c7f464',
   playing: false,
   hasStation: false,

@@ -18,6 +18,23 @@ void (async () => {
         () => document.querySelector('.mini-titles strong')?.textContent === 'Native A',
         'Mini snapshot did not arrive',
       );
+      await until(
+        () => document.querySelector('.mini-banner')?.naturalWidth > 0,
+        'Native mini banner did not load',
+      );
+      const initialMini = await invoke('desktop_snapshot');
+      assert(
+        document.querySelector('.mini-banner').src === initialMini.banner,
+        'Native mini received wrong banner',
+      );
+      assert(
+        document.querySelectorAll('.volume-segments i').length === 12,
+        'Native stepped volume missing',
+      );
+      assert(
+        document.querySelector('[aria-label="Playback time"]').textContent.includes('/ 00:10'),
+        'Native mini track length missing',
+      );
       let denied = false;
       try {
         await invoke('save_settings', { patch: { accent: '#123456' } });
@@ -33,6 +50,19 @@ void (async () => {
       const volume = document.querySelector('input[type="range"]');
       volume.value = '.25';
       volume.dispatchEvent(new Event('input', { bubbles: true }));
+      await until(
+        () => document.querySelector('.volume-value')?.textContent === '0%',
+        'Muted snapshot not reflected in volume meter',
+      );
+      document.querySelector('[aria-label="Unmute"]').click();
+      await until(
+        () => document.querySelector('.volume-value')?.textContent === '25%',
+        'Mini stepped volume did not follow main state',
+      );
+      assert(
+        document.querySelectorAll('.volume-segments .lit').length === 3,
+        'Native mini volume steps incorrect',
+      );
       document.querySelector('[aria-label="Next station"]').click();
       await until(
         () => document.querySelector('.mini-titles strong')?.textContent === 'Native B',
