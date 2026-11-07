@@ -37,8 +37,18 @@ export interface PlayableTrack extends Track {
   modified: number;
   duration?: number | null;
 }
+export interface TrackProblem {
+  path: string;
+  name: string;
+  reason: string;
+  kind: 'file' | 'cache';
+}
+export interface PreparedStation {
+  tracks: PlayableTrack[];
+  problems: TrackProblem[];
+}
 export const prepareStation = (key: string, group = 'all') =>
-  invoke<PlayableTrack[]>('prepare_station', { key, group });
+  invoke<PreparedStation>('prepare_station', { key, group });
 export interface Group {
   id: string;
   name: string;

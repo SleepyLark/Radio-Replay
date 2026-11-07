@@ -388,9 +388,63 @@ test('missing/unsupported tracks are skipped; all-unplayable stations stop visib
     await player.tune(station('mixed', [track('missing'), track('a')]));
     assert.equal(player.state.title, 'a');
     assert.match(player.state.error, /skipped/);
+    assert.equal(player.state.notice.problems[0].path, 'missing');
+    assert.match(player.state.notice.problems[0].reason, /unsupported/);
+    assert.equal(player.state.notice.severity, 'warning');
     await player.tune(station('bad', [track('missing')]));
     assert.equal(player.state.playing, false);
     assert.match(player.state.error, /No playable tracks/);
+    assert.equal(player.state.notice.severity, 'error');
+    assert.equal(player.state.notice.problems[0].path, 'missing');
+  } finally {
+    player.dispose();
+  }
+});
+test('native missing-file reports and codec failures retain paths, reasons and stable notice identity', async () => {
+  const { player } = setup({
+    prepare: async () => ({
+      tracks: [track('missing-codec'), track('a')],
+      problems: [
+        { path: 'missing-file.mp3', name: 'Missing file', reason: 'File not found.', kind: 'file' },
+      ],
+    }),
+  });
+  try {
+    const stationConfig = station('reported', [
+      track('missing-file.mp3'),
+      track('missing-codec'),
+      track('a'),
+    ]);
+    await player.tune(stationConfig);
+    const notice = player.state.notice;
+    assert.equal(player.state.playing, true);
+    assert.equal(notice.problems.length, 2);
+    assert.equal(
+      notice.problems.find((p) => p.path === 'missing-file.mp3').reason,
+      'File not found.',
+    );
+    assert.match(notice.problems.find((p) => p.path === 'missing-codec').reason, /unsupported/);
+    player.tick();
+    player.setVolume(0.4);
+    await player.pause();
+    await player.play();
+    assert.equal(player.state.notice, notice, 'Progress and controls regenerated the same notice');
+    await player.tune(stationConfig);
+    assert.ok(player.state.notice.id > notice.id, 'A fresh tune did not create a new report');
+  } finally {
+    player.dispose();
+  }
+});
+test('runtime playback failures add the failed recording to the report and preserve other playback', async () => {
+  const { player } = setup();
+  try {
+    await player.tune(station('runtime', [track('a'), track('b')], 'longset', 100));
+    const path = player.state.path;
+    player.current.dispatchEvent(new Event('error'));
+    await flush();
+    assert.equal(player.state.playing, true);
+    assert.ok(player.state.notice.problems.some((problem) => problem.path === path));
+    assert.match(player.state.notice.problems[0].reason, /read|decoded/);
   } finally {
     player.dispose();
   }

@@ -287,12 +287,13 @@ async fn prepare_station(
     key: String,
     group: Option<String>,
     cache: State<'_, MetadataCache>,
-) -> Result<Vec<library::PlayableTrack>, String> {
+) -> Result<library::PreparedStation, String> {
     let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
-    let mut tracks = library::playback_files_for_group(config, &key, group.as_deref())?;
+    let mut report = library::playback_report_for_group(config, &key, group.as_deref())?;
+    let tracks = &mut report.tracks;
     let metadata = cache.0.lock().map_err(|e| e.to_string())?;
-    metadata.populate_durations(&mut tracks);
-    for track in &tracks {
+    metadata.populate_durations(tracks);
+    for track in tracks.iter() {
         app.asset_protocol_scope()
             .allow_file(&track.track.path)
             .map_err(|e| e.to_string())?;
@@ -301,10 +302,10 @@ async fn prepare_station(
     if grants.len() + tracks.len() > 100000 {
         grants.clear();
     }
-    for track in &tracks {
+    for track in tracks.iter() {
         grants.insert(format!("{key}\0{}", track.track.path), track.clone());
     }
-    Ok(tracks)
+    Ok(report)
 }
 
 #[tauri::command]

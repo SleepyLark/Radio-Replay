@@ -1,4 +1,4 @@
-import type { PlayableTrack, Station } from '../library';
+import type { PlayableTrack, Station, PreparedStation, TrackProblem } from '../library';
 import { clockFor, fadeSeconds, position, shuffle, type Clock } from './timeline.ts';
 import { tuningMilliseconds } from './tuning.ts';
 
@@ -14,7 +14,16 @@ export interface PlaybackState {
   volume: number;
   muted: boolean;
   error: string;
+  notice: PlaybackNotice | null;
   engine: 'stream' | 'buffered';
+}
+export interface PlaybackNotice {
+  id: number;
+  message: string;
+  stationKey: string;
+  station: string;
+  problems: TrackProblem[];
+  severity: 'warning' | 'error';
 }
 interface Entry {
   index: number;
@@ -32,7 +41,7 @@ interface Buffered {
   loading: boolean;
 }
 export interface PlaybackOptions {
-  prepare: (key: string) => Promise<PlayableTrack[]>;
+  prepare: (key: string) => Promise<PlayableTrack[] | PreparedStation>;
   url: (path: string) => string;
   onState: (state: PlaybackState) => void;
   rememberDuration?: (key: string, track: PlayableTrack, duration: number) => Promise<void>;
@@ -56,6 +65,7 @@ export class Playback {
     volume: 0.8,
     muted: false,
     error: '',
+    notice: null,
     engine: 'stream',
   };
   private options: PlaybackOptions;
@@ -80,6 +90,10 @@ export class Playback {
   private advancing = false;
   private noise: HTMLAudioElement | null = null;
   private cacheWriteFailed = false;
+  private problems = new Map<string, TrackProblem>();
+  private problemVersion = 0;
+  private noticeVersion = 0;
+  private nextNoticeId = 0;
   private timer: ReturnType<typeof setInterval>;
   constructor(options: PlaybackOptions) {
     this.options = options;
@@ -93,15 +107,55 @@ export class Playback {
           void this.advance();
       });
       element.addEventListener('error', () => {
-        if (element === this.current && !this.state.loading && this.wantPlay && !this.fading)
+        if (element === this.current && !this.state.loading && this.wantPlay && !this.fading) {
+          const track = this.clock?.order[this.index];
+          if (track)
+            this.recordProblem(
+              track,
+              element.error?.message || 'The audio file could not be read or decoded.',
+            );
+          this.emit({ error: 'A recording could not be played and was skipped.' });
           void this.advance();
+        }
       });
     }
     this.timer = setInterval(() => this.tick(), 40);
   }
   private emit(update: Partial<PlaybackState> = {}) {
+    if (update.error !== undefined) {
+      const severity = update.playing === false ? 'error' : 'warning';
+      if (!update.error) update.notice = null;
+      else if (
+        update.error !== this.state.error ||
+        this.problemVersion !== this.noticeVersion ||
+        !this.state.notice ||
+        this.state.notice.severity !== severity
+      ) {
+        update.notice = {
+          id: ++this.nextNoticeId,
+          message: update.error,
+          stationKey: this.state.key,
+          station: this.state.station,
+          problems: [...this.problems.values()],
+          severity,
+        };
+        this.noticeVersion = this.problemVersion;
+      }
+    }
     this.state = { ...this.state, ...update };
     this.options.onState({ ...this.state });
+  }
+  private recordProblem(
+    track: { path: string; name: string },
+    reason: string,
+    kind: 'file' | 'cache' = 'file',
+  ) {
+    const key = track.path;
+    const detail = reason.replace(/^Error:\s*/, '');
+    if (this.problems.get(key)?.kind === 'file' && kind === 'cache') return;
+    if (this.problems.get(key)?.reason === detail && this.problems.get(key)?.kind === kind) return;
+    this.problems.set(key, { path: track.path, name: track.name, reason: detail, kind });
+    this.problemVersion++;
   }
   private level() {
     return this.state.muted ? 0 : this.state.volume;
@@ -137,6 +191,8 @@ export class Playback {
     this.controller = new AbortController();
     this.wantPlay = false;
     this.cacheWriteFailed = false;
+    this.problems.clear();
+    this.problemVersion++;
     this.stopSources();
     this.clock = null;
     this.advancing = false;
@@ -217,13 +273,17 @@ export class Playback {
       this.durations.set(key, duration);
       try {
         await this.options.rememberDuration?.(stationKey, track, duration);
-      } catch {
-        if (!signal.aborted && this.state.key === stationKey) this.cacheWriteFailed = true;
+      } catch (e) {
+        if (!signal.aborted && this.state.key === stationKey) {
+          this.cacheWriteFailed = true;
+          this.recordProblem(track, `Could not save this file's duration: ${String(e)}`, 'cache');
+        }
       }
       if (this.durations.size > 20000) this.durations.delete(this.durations.keys().next().value!);
       return duration;
     } catch (e) {
       if (signal.aborted) throw e;
+      this.recordProblem(track, element.error?.message || String(e));
       return 0;
     } finally {
       this.release(element);
@@ -283,8 +343,12 @@ export class Playback {
       title: 'Tuning…',
     });
     try {
-      const tracks = await this.options.prepare(station.key);
+      const prepared = await this.options.prepare(station.key);
       if (token !== this.token) return;
+      const tracks = Array.isArray(prepared) ? prepared : prepared.tracks;
+      if (!Array.isArray(prepared))
+        for (const problem of prepared.problems)
+          this.recordProblem(problem, problem.reason, problem.kind);
       const lengths = new Array<number>(tracks.length);
       let next = 0;
       await Promise.all(
@@ -340,10 +404,14 @@ export class Playback {
       if (token !== this.token) return;
       const at = position(clock, this.now());
       this.index = at.index;
-      const skipped = station.tracks.length - playable.length;
+      const skipped = [...this.problems.values()].filter(
+        (problem) => problem.kind === 'file',
+      ).length;
       this.emit({
         error: [
-          skipped > 0 ? `${skipped} unavailable or unsupported track(s) skipped.` : '',
+          skipped > 0
+            ? `${skipped} file${skipped === 1 ? ' could' : 's could'} not be played and ${skipped === 1 ? 'was' : 'were'} skipped.`
+            : '',
           this.cacheWriteFailed
             ? 'Durations could not be saved. Playback can continue; clear the metadata cache in Settings to retry.'
             : '',
@@ -368,6 +436,7 @@ export class Playback {
         await this.startStream(at.index, at.seconds, token);
       } catch (e) {
         if (token !== this.token) return;
+        this.recordProblem(clock.order[at.index], String(e));
         this.emit({ error: String(e), loading: false });
         await this.advance();
       }
@@ -440,6 +509,7 @@ export class Playback {
           return;
         } catch (e) {
           if (token !== this.token) return;
+          this.recordProblem(clock.order[index], String(e));
           this.emit({ error: `Skipped ${clock.order[index].name}: ${String(e)}` });
         }
       }
@@ -509,8 +579,12 @@ export class Playback {
       if (token !== this.token || this.fading !== fade) return;
       if (!this.wantPlay) incoming.pause();
       fade.started = incoming.currentTime;
-    } catch {
+    } catch (e) {
       if (token === this.token && this.fading === fade) {
+        this.recordProblem(this.clock!.order[index], String(e));
+        this.emit({
+          error: `Could not play ${this.clock!.order[index].name}. Playback will continue with available files.`,
+        });
         this.fading = null;
         this.release(incoming);
         if (outgoing.ended) void this.advance();

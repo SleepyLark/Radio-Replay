@@ -39,28 +39,63 @@ pub struct PlayableTrack {
     pub cache_signature: Option<String>,
 }
 
-/// Resolve only tracks belonging to a saved station; missing files are skipped.
+#[derive(Serialize, Clone)]
+pub struct TrackProblem {
+    pub path: String,
+    pub name: String,
+    pub reason: String,
+    pub kind: &'static str,
+}
+#[derive(Serialize)]
+pub struct PreparedStation {
+    pub tracks: Vec<PlayableTrack>,
+    pub problems: Vec<TrackProblem>,
+}
+
+/// Resolve saved tracks while retaining diagnostics for files that cannot be used.
 pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, String> {
+    Ok(playback_report(config, key)?.tracks)
+}
+fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String> {
     let station = config
         .custom
         .iter()
         .find(|s| s.key == key)
         .ok_or("Station no longer exists")?;
     let mut files = Vec::new();
+    let mut problems = Vec::new();
     for track in &station.tracks {
         let path = Path::new(&track.path);
-        if !audio_file(path) {
-            continue;
-        }
-        let Ok(path) = fs::canonicalize(path) else {
-            continue;
+        let resolved = (|| -> Result<_, String> {
+            if !audio_file(path) {
+                return Err("This file type is not supported.".into());
+            }
+            let access_error = |error: std::io::Error| {
+                match error.kind() {
+                std::io::ErrorKind::NotFound=>"File not found. It may have been moved or deleted, or its drive is disconnected.".into(),
+                std::io::ErrorKind::PermissionDenied=>"Access denied. Check this file's permissions.".into(),
+                _=>format!("Could not access this file: {error}"),
+            }
+            };
+            let path = fs::canonicalize(path).map_err(access_error)?;
+            let meta = fs::metadata(&path).map_err(access_error)?;
+            if !meta.is_file() {
+                return Err("This path is a folder, not an audio file.".into());
+            }
+            Ok((path, meta))
+        })();
+        let (path, meta) = match resolved {
+            Ok(value) => value,
+            Err(reason) => {
+                problems.push(TrackProblem {
+                    path: track.path.clone(),
+                    name: track.name.clone(),
+                    reason,
+                    kind: "file",
+                });
+                continue;
+            }
         };
-        let Ok(meta) = fs::metadata(&path) else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
         let mut track = track.clone();
         track.path = path.to_string_lossy().into_owned();
         files.push(PlayableTrack {
@@ -76,13 +111,23 @@ pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, 
             cache_signature: crate::metadata::Cache::signature_from_metadata(&meta),
         });
     }
-    Ok(files)
+    Ok(PreparedStation {
+        tracks: files,
+        problems,
+    })
 }
 pub fn playback_files_for_group(
-    mut config: Config,
+    config: Config,
     key: &str,
     group: Option<&str>,
 ) -> Result<Vec<PlayableTrack>, String> {
+    Ok(playback_report_for_group(config, key, group)?.tracks)
+}
+pub fn playback_report_for_group(
+    mut config: Config,
+    key: &str,
+    group: Option<&str>,
+) -> Result<PreparedStation, String> {
     if let Some(id) = group.filter(|g| *g != "all") {
         let members = config
             .groups
@@ -104,7 +149,7 @@ pub fn playback_files_for_group(
             });
         }
     }
-    playback_files(&config, key)
+    playback_report(&config, key)
 }
 pub fn track(path: PathBuf) -> Result<Track, String> {
     if !audio_file(&path) || !path.is_file() {
@@ -546,6 +591,39 @@ mod tests {
             tracks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             ["a", "z"]
         );
+    }
+    #[test]
+    fn playback_report_names_bad_files_and_respects_group_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.mp3");
+        let missing = dir.path().join("missing.mp3");
+        let unsupported = dir.path().join("notes.txt");
+        fs::write(&good, b"audio").unwrap();
+        fs::write(&unsupported, b"notes").unwrap();
+        let mut config = Config::default();
+        config.custom.push(Station {
+            key: "station".into(),
+            station: "Station".into(),
+            tracks: [&good, &missing, &unsupported]
+                .into_iter()
+                .map(|path| Track {
+                    path: path.to_string_lossy().into_owned(),
+                    name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                    extra: Default::default(),
+                })
+                .collect(),
+            extra: Default::default(),
+        });
+        let report = playback_report_for_group(config.clone(), "station", None).unwrap();
+        assert_eq!(report.tracks.len(), 1);
+        assert_eq!(report.problems.len(), 2);
+        assert_eq!(report.problems[0].path, missing.to_string_lossy());
+        assert!(report.problems[0].reason.contains("File not found"));
+        assert!(report.problems[1].reason.contains("not supported"));
+        config.groups.push(serde_json::json!({"id":"good-only","members":[format!("station|{}",good.to_string_lossy())]}));
+        let subset = playback_report_for_group(config, "station", Some("good-only")).unwrap();
+        assert_eq!(subset.tracks.len(), 1);
+        assert!(subset.problems.is_empty());
     }
     #[test]
     fn dropped_audio_collects_folders_and_deduplicates_selected_files() {

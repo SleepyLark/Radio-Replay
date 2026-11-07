@@ -353,6 +353,114 @@ dialog .error {
 }
 
 /* Separate native mini window. It controls the same engine as the bottom bar. */
+.toast-region {
+  position: fixed;
+  z-index: 30;
+  right: 24px;
+  bottom: 24px;
+  width: 420px;
+  max-width: calc(100vw - 320px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.toast-region.above-player-bar {
+  bottom: 108px;
+  max-height: calc(100dvh - 132px);
+}
+.toast {
+  padding: 16px 18px;
+  border: 1px solid #456157;
+  border-left: 3px solid #e7c47d;
+  background: #111b1af5;
+  box-shadow: 0 10px 32px #0008;
+  border-radius: 4px;
+  pointer-events: auto;
+}
+.toast-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.toast.toast-error {
+  border-left-color: #f5a69a;
+}
+.toast-heading strong {
+  font:
+    500 18px Oswald,
+    sans-serif;
+}
+.toast-dismiss {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.toast p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 8px 0 14px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.toast-details {
+  background: #20362e;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 7px 10px;
+  font:
+    11px 'DM Mono',
+    monospace;
+}
+.problem-station {
+  color: var(--green);
+  font:
+    500 20px Oswald,
+    sans-serif;
+}
+.problem-summary {
+  overflow-wrap: anywhere;
+}
+.problem-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+}
+.problem-list li {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+}
+.problem-list strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.problem-list code {
+  display: block;
+  font:
+    11px 'DM Mono',
+    monospace;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.problem-list small {
+  color: var(--green);
+  font-size: 10px;
+}
+
 .mini-player {
   position: fixed;
   inset: 0;

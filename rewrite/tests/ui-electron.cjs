@@ -108,6 +108,17 @@ app
         assert(getComputedStyle(document.querySelector('.signal')).color==='rgb(255, 136, 0)','Saved accent not applied');
         await wait(200);
         assert(window.__testCalls().filter(c=>c==='track_details').length===1,'Metadata fetched on progress ticks');
+        await until(()=>!!document.querySelector('.toast'),'Skipped-file toast missing');
+        assert(!document.querySelector('.deck > .notice')&&!document.querySelector('.deck > .error'),'Playback notice still occupies the top of the layout');
+        const headerTop=document.querySelector('.radio-screen header').getBoundingClientRect().top;
+        button('View files (1)').click();await until(()=>document.querySelector('dialog')?.open,'Problem files dialog did not open');
+        assert(document.querySelector('.problem-list code').textContent==='C:\\\\Radio\\\\missing.mp3','Problematic path missing from details');
+        assert(document.querySelector('.problem-list').textContent.includes('File not found'),'Failure reason missing');
+        const problemSearch=document.querySelector('dialog input');problemSearch.value='not-present';problemSearch.dispatchEvent(new Event('input',{bubbles:true}));await wait(20);assert(document.querySelector('.problem-list').textContent.includes('No files match'),'Problem search did not filter');
+        button('Close').click();await wait(20);document.querySelector('.toast-dismiss').click();await wait(300);
+        assert(!document.querySelector('.toast'),'Dismissed toast returned during progress updates');
+        assert(document.querySelector('[aria-label="Pause"]'),'Viewing/dismissing warning stopped playback');
+        assert(document.querySelector('.radio-screen header').getBoundingClientRect().top===headerTop,'Toast changed the player layout');
         button('← All Stations').click();await wait(30);assert(document.querySelector('.compact-player'),'Bar missing after returning to All Stations');checkBar();document.querySelector('.compact-title').click();await wait(30);assert(!document.querySelector('.compact-player'),'Bar remained after reopening player');
         button('← All Stations').click();await wait(30);document.querySelector('.home-station').click();await wait(60);
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===1,'Returning to player restarted audio');
@@ -137,6 +148,7 @@ app
         assert(document.querySelectorAll('.sidebar-station').length===1,'Group filter did not apply');
         document.querySelector('.sidebar-station').click();await until(()=>document.querySelector('[aria-label="Pause"]'),'Group did not play');
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===2,'Group station did not retune');
+        assert(!document.querySelector('.toast'),'Filtered-out missing file produced a warning');
         button('⚙ Settings').click();await wait(30);assert(!label('Keep playing in the tray').querySelector('input').checked,'Close-to-tray starts enabled');button('Appearance').click();await wait(20);
         assert(!document.querySelector('.compact-player'),'Bar visible in Settings');
         label('Show recording progress').querySelector('input').click();
@@ -146,8 +158,10 @@ app
         const layout=label('Station banner layout').querySelector('select');layout.value='column';layout.dispatchEvent(new Event('change',{bubbles:true}));
         await until(()=>window.__testSettings().bannerLayout==='column','Layout not saved');
         window.__testFailSetting();label('Reduce motion').querySelector('input').click();await until(()=>button('Retry save'),'Save failure not reported');
+        await until(()=>document.querySelector('.toast')?.textContent.includes('Fixture write failure'),'Application error did not produce a toast');
         button('Retry save').click();await until(()=>window.__testSettings().reduceMotion===true,'Retry did not save');
         await until(()=>!document.querySelector('.deck > .error'),'Recovered settings error remains visible');
+        await until(()=>!document.querySelector('.toast'),'Resolved application error toast remains visible');
         button('Advanced').click();await wait(20);button('Clear metadata cache').click();await until(()=>window.__testCalls().includes('clear_metadata_cache'),'Cache clear not requested');
         button('← Back to stations').click();await wait(30);
         assert(!document.querySelector('.dial').classList.contains('banner-row'),'Column layout not applied');
@@ -174,12 +188,31 @@ app
         assert(document.querySelectorAll('.file-row').length===2,'Dropped files not deduplicated');
         window.__testEmit('audio-drop-start',2);button('Cancel').click();await wait(20);window.__testEmit('audio-drop',{id:2,error:'',tracks:[{path:'late.wav',name:'Late'}]});await wait(20);
         assert(!document.querySelector('dialog'),'Late drop reopened a cancelled editor');
-        return 'UI passed: All Stations-only bar, tags/lyric, editor, group dialogs, volume wheel, autosave/retry, scanlines, banner layout and bulk removal.';
+        return 'UI passed: file toast/details/search/dismissal, All Stations bar, playback, editor, groups, autosave/retry, and bulk removal.';
       })()`,
         true,
       );
       console.log(result);
       await new Promise((resolve) => setTimeout(resolve, 750));
+      fs.writeFileSync(
+        path.join(output, 'ui-toast.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.toast-details').click()`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      fs.writeFileSync(
+        path.join(output, 'ui-file-problems.png'),
+        (await window.webContents.capturePage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(
+        `[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='Close').click()`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.toast-dismiss').click()`,
+      );
       fs.writeFileSync(
         path.join(output, 'ui-player.png'),
         (await window.webContents.capturePage()).toPNG(),

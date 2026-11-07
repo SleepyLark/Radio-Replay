@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import Toasts from './Toasts.svelte';
+  import ProblemDetails from './ProblemDetails.svelte';
+  import type {Notification} from './notifications';
   import { desktop, emptyConfig, loadConfig, importConfig, artworkUrl, audioUrl, prepareStation, rememberDuration, trackDetails, type TrackDetails, type Config, type Station } from './library';
   import Groups from './Groups.svelte';
   import Settings from './Settings.svelte';
@@ -21,11 +24,20 @@
   let active = $state<Station | null>(null);
   let busy = $state(true);
   let error = $state('');
+  let notifications=$state<Notification[]>([]);
+  let notificationDetails=$state<Notification|null>(null);
+  let nextNotificationId=0;
+  let lastPlaybackNotice=0;
+  function notify(item:Omit<Notification,'id'>){notifications=[{...item,id:++nextNotificationId},...notifications.filter(existing=>existing.source!==item.source)].slice(0,3);}
+  function dismissNotification(id:number){const item=notifications.find(item=>item.id===id);notifications=notifications.filter(item=>item.id!==id);if(item?.source==='app')error='';}
+  $effect(()=>{const message=error;untrack(()=>{if(message)notify({source:'app',severity:'error',message,problems:[]});else notifications=notifications.filter(item=>item.source!=='app');});});
+  $effect(()=>{const notice=playbackNotice;untrack(()=>{if(!notice){notifications=notifications.filter(item=>item.source!=='playback');return;}if(notice.id===lastPlaybackNotice)return;lastPlaybackNotice=notice.id;notify({source:'playback',severity:notice.severity,message:notice.message,stationKey:notice.stationKey,station:notice.station,problems:notice.problems});});});
   let view = $state('Stations');
   let editing = $state(false);
   let editTarget = $state<Station | null>(null);
   let player: Playback | null = null;
   let playback = $state<PlaybackState | null>(null);
+  const playbackNotice=$derived(playback?.notice);
   let groupId=$state('all');
   let history=new StationHistory();
   let details=$state<TrackDetails|null>(null);
@@ -54,7 +66,7 @@
   const accent=$derived(stationAccent(playingStation,config.settings,sampledAccent));
   $effect(()=>{const url=bannerPath;let cancelled=false;sampledAccent=bannerSamples.get(url)??'';if(url&&!bannerSamples.has(url))void sampleBanner(url).then(color=>{if(bannerSamples.size>=128)bannerSamples.delete(bannerSamples.keys().next().value!);bannerSamples.set(url,color);if(!cancelled)sampledAccent=color;}).catch(()=>{});return()=>{cancelled=true;};});
   $effect(()=>{document.documentElement.style.setProperty('--accent',accent);document.documentElement.style.setProperty('--green',accent);document.documentElement.dataset.density=String(config.settings.listDensity??'comfortable');document.documentElement.classList.toggle('reduce-motion',config.settings.reduceMotion===true);document.documentElement.classList.toggle('no-scanlines',config.settings.showScanlines===false);});
-  function tune(station: Station,navigation=false,reveal=true) { if(!navigation)history.cancelPending();active = station;if(reveal)showView('Player');if(playback?.key===station.key&&!playback.error)return; const members=selectedGroup?new Set(selectedGroup.members):null; const projected=members&&!members.has(station.key)?{...station,tracks:station.tracks.filter(t=>members.has(`${station.key}|${t.path}`))}:station; if(desktop) void player?.tune(projected,config.settings,groupId); }
+  function tune(station: Station,navigation=false,reveal=true) { if(!navigation)history.cancelPending();active = station;if(reveal)showView('Player');if(playback?.key===station.key&&(!playback.error||playback.notice?.severity==='warning'))return; const members=selectedGroup?new Set(selectedGroup.members):null; const projected=members&&!members.has(station.key)?{...station,tracks:station.tracks.filter(t=>members.has(`${station.key}|${t.path}`))}:station; if(desktop) void player?.tune(projected,config.settings,groupId); }
   function showView(next:string){view=next;void tick().then(()=>document.querySelector('.deck')?.scrollTo({top:0}));}
   function step(direction: number) {
     if(!lineup.length) return;
@@ -102,7 +114,7 @@
 </script>
 
 <svelte:window onkeydown={(event) => {
-  if(editing || managing || groupDraft!==undefined || !['Stations','Player'].includes(view) || event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
+  if(editing || managing || notificationDetails || groupDraft!==undefined || !['Stations','Player'].includes(view) || event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
   if(event.code==='Space'&&event.target instanceof HTMLElement&&event.target.closest('button'))return;
   if(event.code === 'Space') { event.preventDefault(); toggle(); }
   if(event.key === 'ArrowDown') { event.preventDefault(); step(1); }
@@ -131,8 +143,6 @@
       <div class="sidebar-tools"><button onclick={mini} disabled={!desktop}>Mini player</button><button onclick={importLibrary} disabled={busy||!desktop}>Import library</button><button onclick={()=>quitDesktop().catch(e=>error=String(e))} disabled={!desktop}>Quit</button></div>
     </aside>
     <section class="deck">
-      {#if error}<div class="error" role="alert">{error}</div>{/if}
-      {#if playback?.error}<div class="notice" role="status">{playback.error}</div>{/if}
       {#if readingDrops}<div class="notice" role="status">Reading dropped audio…</div>{/if}
       {#if !desktop}<div class="notice">Browser preview. Open the desktop app to import your library.</div>{/if}
       {#if view==='Stations'}
@@ -166,6 +176,8 @@
   </footer>{/if}
   </main>
 </div>
+<Toasts items={notifications} raised={view==='Stations'&&!!playback?.key} onview={item=>notificationDetails=item} ondismiss={dismissNotification}/>
+{#if notificationDetails}<ProblemDetails notification={notificationDetails} oncancel={()=>notificationDetails=null} ondismiss={()=>{dismissNotification(notificationDetails!.id);notificationDetails=null;}} onedit={config.custom.some(station=>station.key===notificationDetails?.stationKey)?()=>{const station=config.custom.find(station=>station.key===notificationDetails?.stationKey);notificationDetails=null;if(station)edit(station);}:undefined}/>{/if}
 {#if editing}{#key editTarget?.key}<StationEditor station={editTarget} logo={editTarget?config.logos[editTarget.key]:''} settings={config.settings} incoming={droppedTracks} onsaved={saved} oncancel={()=>editing=false}/>{/key}{/if}
 {#if groupDraft!==undefined}<Groups {config} group={groupDraft} onsaved={groupSaved} oncancel={()=>groupDraft=undefined}/>{/if}
 {#if managing}<ManageStations {config} onsaved={next=>{saved(next);managing=false;}} onedit={station=>{managing=false;edit(station);}} oncancel={()=>managing=false}/>{/if}

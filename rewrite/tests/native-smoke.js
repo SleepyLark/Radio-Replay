@@ -84,7 +84,7 @@ void (async () => {
         'Fixture library did not load',
       );
       Math.random = () => 0;
-      const uncached = await invoke('prepare_station', { key: 'a', group: 'all' });
+      const uncached = (await invoke('prepare_station', { key: 'a', group: 'all' })).tracks;
       await invoke('native_smoke_report', {
         phase: 'startupCache',
         ok: true,
@@ -103,7 +103,7 @@ void (async () => {
         ok: true,
         message: 'Reopening SQLite after duration write through native IPC',
       });
-      const warm = await invoke('prepare_station', { key: 'a', group: 'all' });
+      const warm = (await invoke('prepare_station', { key: 'a', group: 'all' })).tracks;
       assert(warm[0].duration === 10, 'Duration write did not survive native IPC');
       [...document.querySelectorAll('button')]
         .find((b) => b.textContent.trim() === '⚙ Settings')
@@ -127,6 +127,23 @@ void (async () => {
         () => !!document.querySelector('[aria-label="Pause"]'),
         'WebView2 audio playback failed',
       );
+      await until(() => !!document.querySelector('.toast'), 'Native missing-file toast not shown');
+      document.querySelector('.toast-details').click();
+      await until(() => document.querySelector('dialog')?.open, 'Native file details did not open');
+      assert(
+        document.querySelector('.problem-list code')?.textContent.includes('missing-fixture.mp3'),
+        'Native missing path not reported',
+      );
+      assert(
+        document.querySelector('.problem-list')?.textContent.includes('File not found'),
+        'Native failure reason not reported',
+      );
+      [...document.querySelectorAll('dialog button')]
+        .find((b) => b.textContent === 'Dismiss notification')
+        .click();
+      await until(() => !document.querySelector('dialog'), 'File report did not close');
+      await wait(300);
+      assert(!document.querySelector('.toast'), 'Dismissed native toast reappeared');
       assert(!document.querySelector('.compact-player'), 'Bar visible on player screen');
       document.querySelector('.back-stations').click();
       await until(() => !!document.querySelector('.compact-player'), 'Bar missing on All Stations');

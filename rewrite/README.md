@@ -318,3 +318,26 @@ UI smoke covers a loaded banner, live banner/time/volume changes, mute, volume-w
 forwarding, missing-image and empty-duration fallbacks, and footer positioning.
 Native smoke checks the real asset-protocol banner and shared volume updates from
 the main engine. `out/phase5-mini.png` shows the rendered mini with fixture artwork.
+
+## Preview 0.3.4: dismissible notifications and file reports
+
+- Playback warnings and main-app errors use floating toasts instead of messages
+  above the player. Dismiss with the × button; progress ticks and volume/pause
+  updates do not recreate the same dismissed notice. A fresh failure or tune can
+  produce a new notification. Toasts sit above the All Stations bar when visible.
+- View files opens a searchable report with names, selectable full paths and failure
+  reasons, plus an Edit station shortcut. Large reports initially render 100 files;
+  search checks the full report and Show more exposes additional entries. General
+  app errors offer View details. Dismiss notification also works from the dialog.
+- Native station preparation now returns `{ tracks, problems }`, preserving missing,
+  unreadable and unsupported-file diagnostics before playable-file filtering. Group
+  filters apply before reporting. The playback engine adds codec, runtime and
+  duration-cache failures to the same report and distinguishes warnings from fatal
+  errors. Reports never grant access to unavailable files or delete source media.
+- Opening a station with an existing nonfatal warning keeps its current broadcast.
+  Viewing or dismissing notifications also leaves playback running.
+
+Regression checks cover stable notice identity, native missing-file paths, codec
+and runtime failures, filtered groups, search and dismissal without layout shifts.
+Native smoke includes a missing-file fixture and checks the real toast/report path.
+Rendered examples are `out/ui-toast.png` and `out/ui-file-problems.png`.

@@ -10,6 +10,7 @@ let config = {
       tracks: [
         { path: 'first.wav', name: 'First' },
         { path: 'second.wav', name: 'Second' },
+        { path: 'C:\\Radio\\missing.mp3', name: 'Missing recording' },
       ],
     },
   ],
@@ -104,14 +105,24 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
       case 'prepare_station': {
         const group = config.groups.find((g) => g.id === args.group);
         const station = config.custom.find((s) => s.key === args.key);
-        return station.tracks
-          .filter(
-            (t) =>
-              !group ||
-              group.members.includes(station.key) ||
-              group.members.includes(station.key + '|' + t.path),
-          )
-          .map((t) => ({ ...t, size: 480044, modified: 1, duration: 30 }));
+        const selected = station.tracks.filter(
+          (t) =>
+            !group ||
+            group.members.includes(station.key) ||
+            group.members.includes(station.key + '|' + t.path),
+        );
+        return {
+          tracks: selected
+            .filter((t) => !t.path.includes('missing.mp3'))
+            .map((t) => ({ ...t, size: 480044, modified: 1, duration: 30 })),
+          problems: selected
+            .filter((t) => t.path.includes('missing.mp3'))
+            .map((t) => ({
+              ...t,
+              kind: 'file',
+              reason: 'File not found. It may have been moved or deleted.',
+            })),
+        };
       }
       case 'track_details':
         return {

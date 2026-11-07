@@ -95,10 +95,21 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
         config
             .logos
             .insert(key.into(), art.to_string_lossy().into_owned().into());
+        let mut station_tracks = tracks.clone();
+        if key == "a" {
+            station_tracks.push(Track {
+                path: directory
+                    .join("missing-fixture.mp3")
+                    .to_string_lossy()
+                    .into_owned(),
+                name: "Missing native recording".into(),
+                extra: Default::default(),
+            });
+        }
         config.custom.push(Station {
             key: key.into(),
             station: name.into(),
-            tracks: tracks.clone(),
+            tracks: station_tracks,
             extra,
         });
     }
