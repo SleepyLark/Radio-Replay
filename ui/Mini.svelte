@@ -1,6 +1,7 @@
 <script lang="ts">
   import {onMount} from 'svelte';
   import ControlIcon from './ControlIcon.svelte';
+  import {mediaKeyAction} from './media-session';
   import VolumeControl from './VolumeControl.svelte';
   import {formatTime} from './playback/format';
   import {getCurrentWindow} from '@tauri-apps/api/window';
@@ -19,7 +20,7 @@
     return()=>{disposed=true;unlisten?.();};
   });
 </script>
-<svelte:window onkeydown={event=>{if(event.target instanceof HTMLElement&&event.target.closest('input,button'))return;if(event.code==='Space'){event.preventDefault();void action({type:'toggle'});}if(event.key==='Escape')void restore();if(event.key==='ArrowLeft')void action({type:'previous'});if(event.key==='ArrowRight')void action({type:'next'});}}/>
+<svelte:window onkeydown={event=>{const mediaAction=mediaKeyAction(event);if(mediaAction){event.preventDefault();void action(mediaAction);return;}if(event.target instanceof HTMLElement&&event.target.closest('input,button'))return;if(event.code==='Space'){event.preventDefault();void action({type:'toggle'});}if(event.key==='Escape')void restore();if(event.key==='ArrowLeft')void action({type:'previous'});if(event.key==='ArrowRight')void action({type:'next'});}}/>
 <div class="mini-player" style={`--accent:${accent};--green:${accent};background-color:${bannerColor}`}>
   {#if snapshot.banner&&failedBanner!==snapshot.banner}{#key snapshot.banner}<img class="mini-banner" src={snapshot.banner} alt="" onerror={event=>failedBanner=event.currentTarget.getAttribute('src')??''}/>{/key}{/if}
   <header class="mini-drag" role="toolbar" tabindex="0" aria-label="Mini player window" onpointerdown={event=>{if(event.button===0&&!(event.target instanceof HTMLElement&&event.target.closest('button')))void getCurrentWindow().startDragging().catch(e=>error=String(e));}}><span>RADIO REPLAY</span><button aria-label="Restore main window" onclick={restore}>↗</button></header>

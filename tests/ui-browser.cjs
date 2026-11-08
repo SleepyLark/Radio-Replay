@@ -1,14 +1,14 @@
-const { app, BrowserWindow } = require('electron');
+const {chromium}=require('playwright');
+let browser;
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const output = path.join(__dirname, '..', 'out');
 fs.mkdirSync(output, { recursive: true });
-app.setPath('userData', path.join(output, 'ui-profile'));
-app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 const timeout = setTimeout(() => {
   console.error('UI smoke timed out');
-  app.exit(1);
+  process.exit(1);
 }, 30000);
 const dist = path.resolve(__dirname, '..', 'dist');
 const samples = 30 * 8000;
@@ -64,31 +64,19 @@ const server = http.createServer((req, res) => {
     res.end(bytes);
   });
 });
-app
-  .whenReady()
-  .then(async () => {
+(async () => {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const window = new BrowserWindow({
-      show: false,
-      width: 1200,
-      height: 800,
-      webPreferences: {
-        offscreen: true,
-        preload: path.join(__dirname, 'ui-preload.cjs'),
-        sandbox: false,
-        contextIsolation: true,
-        nodeIntegration: false,
-        backgroundThrottling: false,
-      },
-    });
+    browser=await chromium.launch({channel:process.env.RADIO_REPLAY_BROWSER||'msedge',headless:true,args:['--autoplay-policy=no-user-gesture-required']});
+    const page=await browser.newPage({viewport:{width:1200,height:800}});
+    await page.addInitScript({path:path.join(__dirname,'ui-fixture.js')});
     try {
-      await window.loadURL(`http://127.0.0.1:${server.address().port}`);
+      await page.goto(`http://127.0.0.1:${server.address().port}`);
       await new Promise((resolve) => setTimeout(resolve, 350));
       fs.writeFileSync(
         path.join(output, 'ui-home.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      const result = await window.webContents.executeJavaScript(
+      const result = await page.evaluate(
         `(async()=>{
         const wait=ms=>new Promise(r=>setTimeout(r,ms));
         const assert=(ok,message)=>{if(!ok)throw new Error(message);};
@@ -98,6 +86,12 @@ app
         const checkBar=()=>{const bar=document.querySelector('.compact-player'),side=document.querySelector('aside').getBoundingClientRect(),box=bar.getBoundingClientRect();assert(Math.abs(box.left-side.right)<2,'Bar extends under sidebar');assert(Math.abs(box.right-innerWidth)<2&&Math.abs(box.bottom-innerHeight)<2,'Bar does not fill bottom of content pane');assert(Math.abs(side.bottom-innerHeight)<2,'Sidebar no longer spans full app height');assert(bar.scrollWidth<=bar.clientWidth,'Bar controls overflow');};
         Math.random=()=>0;
         assert(!document.querySelector('.compact-player'),'Bar visible before tuning');
+        assert(!document.querySelector('.sidebar-tools'),'Sidebar footer remains');
+        assert(!document.querySelector('aside').textContent.includes('Import library'),'Import remains in sidebar');
+        assert(!document.querySelector('aside').textContent.includes('Quit'),'Quit remains in sidebar');
+        button('MANAGE STATIONS').click();await until(()=>document.querySelector('dialog')?.open,'Manager missing');
+        assert(document.querySelector('dialog .manage-import button')?.textContent==='Import library','Manager missing import');
+        button('Cancel').click();await wait(30);
         document.querySelector('.home-station').click();
         await until(()=>document.querySelector('.track-title')?.textContent.includes('Embedded song'),'Embedded tags not displayed');
         assert(document.querySelector('.lyrics .current')?.textContent==='Opening lyric','Synced lyric missing');
@@ -118,6 +112,8 @@ app
         button('Close').click();await wait(20);document.querySelector('.toast-dismiss').click();await wait(300);
         assert(!document.querySelector('.toast'),'Dismissed toast returned during progress updates');
         assert(document.querySelector('[aria-label="Pause"]'),'Viewing/dismissing warning stopped playback');
+        window.__testMediaAction('pause');await until(()=>document.querySelector('[aria-label="Play"]'),'Media pause failed');
+        window.__testMediaAction('play');await until(()=>document.querySelector('[aria-label="Pause"]'),'Media play failed');
         assert(document.querySelector('.radio-screen header').getBoundingClientRect().top===headerTop,'Toast changed the player layout');
         button('← All Stations').click();await wait(30);assert(document.querySelector('.compact-player'),'Bar missing after returning to All Stations');checkBar();document.querySelector('.compact-title').click();await wait(30);assert(!document.querySelector('.compact-player'),'Bar remained after reopening player');
         button('← All Stations').click();await wait(30);document.querySelector('.home-station').click();await wait(60);
@@ -196,74 +192,74 @@ app
       await new Promise((resolve) => setTimeout(resolve, 750));
       fs.writeFileSync(
         path.join(output, 'ui-toast.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `document.querySelector('.toast-details').click()`,
       );
       await new Promise((resolve) => setTimeout(resolve, 70));
       fs.writeFileSync(
         path.join(output, 'ui-file-problems.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='Close').click()`,
       );
       await new Promise((resolve) => setTimeout(resolve, 30));
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `document.querySelector('.toast-dismiss').click()`,
       );
       fs.writeFileSync(
         path.join(output, 'ui-player.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `document.querySelector('.back-stations').click()`,
       );
       await new Promise((r) => setTimeout(r, 50));
       fs.writeFileSync(
         path.join(output, 'ui-home-playing.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `document.querySelector('.compact-title').click()`,
       );
       await new Promise((r) => setTimeout(r, 30));
-      await window.webContents.executeJavaScript(`document.querySelector('.edit-link').click()`);
+      await page.evaluate(`document.querySelector('.edit-link').click()`);
       await new Promise((r) => setTimeout(r, 100));
       fs.writeFileSync(
         path.join(output, 'ui-editor.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='Cancel').click()`,
       );
-      window.setContentSize(760, 560);
+      await page.setViewportSize({width:760,height:560});
       await new Promise((r) => setTimeout(r, 100));
       console.log(
-        await window.webContents.executeJavaScript(
+        await page.evaluate(
           `(()=>{if(document.querySelector('.deck').scrollWidth>document.querySelector('.deck').clientWidth)throw new Error('Player overflows minimum window');if(document.querySelector('.compact-player'))throw new Error('Bar visible on small player screen');return 'Responsive player fits 760 × 560';})()`,
         ),
       );
       fs.writeFileSync(
         path.join(output, 'ui-player-small.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `document.querySelector('.back-stations').click()`,
       );
       await new Promise((r) => setTimeout(r, 50));
-      await window.webContents.executeJavaScript(
+      await page.evaluate(
         `(()=>{const bar=document.querySelector('.compact-player'),side=document.querySelector('aside').getBoundingClientRect();if(!bar||bar.getBoundingClientRect().bottom>innerHeight)throw new Error('All Stations bar missing or outside viewport');if(Math.abs(bar.getBoundingClientRect().left-side.right)>1||bar.scrollWidth>bar.clientWidth)throw new Error('Bar overlaps sidebar or overflows narrow pane');})()`,
       );
       fs.writeFileSync(
         path.join(output, 'ui-home-playing-small.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
-      window.setContentSize(480, 160);
-      await window.loadURL(`http://127.0.0.1:${server.address().port}/index.html?mini=1`);
+      await page.setViewportSize({width:480,height:160});
+      await page.goto(`http://127.0.0.1:${server.address().port}/index.html?mini=1`);
       console.log(
-        await window.webContents.executeJavaScript(
+        await page.evaluate(
           `(async()=>{
         const wait=ms=>new Promise(r=>setTimeout(r,ms));const assert=(ok,message)=>{if(!ok)throw new Error(message);};
         for(let i=0;i<100&&!document.querySelector('.mini-titles strong')?.textContent.includes('Fixture Radio');i++)await wait(50);
@@ -300,30 +296,30 @@ app
       );
       fs.writeFileSync(
         path.join(output, 'phase5-mini.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
       clearTimeout(timeout);
-      window.destroy();
+      await browser.close();
       server.close();
-      app.exit(0);
+      process.exit(0);
     } catch (error) {
       console.error(error);
       console.error(
-        await window.webContents.executeJavaScript(
+        await page.evaluate(
           'JSON.stringify({text:document.body.innerText,calls:window.__testCalls()})',
         ),
       );
       fs.writeFileSync(
         path.join(output, 'phase4-ui.png'),
-        (await window.webContents.capturePage()).toPNG(),
+        await page.screenshot(),
       );
       clearTimeout(timeout);
-      window.destroy();
+      await browser.close();
       server.close();
-      app.exit(1);
+      process.exit(1);
     }
-  })
+  })()
   .catch((error) => {
     console.error(error);
-    app.exit(1);
+    process.exit(1);
   });

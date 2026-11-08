@@ -11,11 +11,12 @@
   import StationEditor from './StationEditor.svelte';
   import {listenDesktop,publishDesktop,openMini,quitDesktop,type DesktopAction,type DesktopSnapshot} from './desktop';
   import {resolveTuningSound} from './library';
-  import bundledStatic from '../../assets/audio/static.mp3?url';
+  import bundledStatic from '../assets/audio/static.mp3?url';
   import StationBanner from './StationBanner.svelte';
   import RadioControls from './RadioControls.svelte';
   import TrackTitle from './TrackTitle.svelte';
   import ManageStations from './ManageStations.svelte';
+  import {connectMediaSession,mediaKeyAction} from './media-session';
   import {stationAccent, sampleBanner} from './appearance';
   import type {Group} from './library';
   import {listenAudioDrops, type Track} from './library';
@@ -50,6 +51,7 @@
   const dropTargets=new Map<number,number>();
   const bannerSamples=new Map<string,string>();
   let lastWheel=0;
+  let browserMedia:ReturnType<typeof connectMediaSession>|undefined;
   const metadataKey=$derived(playback?.key??'');
   const metadataPath=$derived(playback?.path??'');
   const groups=$derived(config.groups.filter(g=>g&&typeof g.id==='string'&&Array.isArray(g.members)));
@@ -77,7 +79,7 @@
   function toggle() { if(playback?.playing) void player?.pause(); else void player?.play(); }
   function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
   async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
-  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};return publishDesktop(snapshot);}
+  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
   function edit(station: Station | null) { editorSession++;droppedTracks=[];editTarget = station; editing = true; }
   function saved(next: Config) {
     const wasPlaying=playback?.playing;
@@ -96,6 +98,7 @@
   const sections=$derived.by(()=>{const result=new Map<string,Station[]>();for(const station of stations){const heading=groupId==='all'?String(station.game??''):'Stations';if(!result.has(heading))result.set(heading,[]);result.get(heading)!.push(station);}return [...result];});
   function groupSaved(next:Config,id:string){saved(next);groupDraft=undefined;if(id!==groupId){groupId=id;changeGroup();}}
   onMount(() => {
+    if(desktop)browserMedia=connectMediaSession(desktopAction);
     if(desktop) player = new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,tuningSource:async value=>{if(value===''||value==='off')return null;if(typeof value!=='string'||value==='bundled')return bundledStatic;const path=await resolveTuningSound();return path?audioUrl(path):null;},onState:state => {playback = state;if(state.playing&&!state.loading)history.commit(state.key);}});
     void (async () => { try { config = await loadConfig(); } catch (e) { error = String(e); } finally { busy = false; } })();
     let disposed=false;let unlisten:(()=>void)|undefined;
@@ -103,7 +106,7 @@
     if(desktop)void listenAudioDrops(id=>{readingDrops++;dropTargets.set(id,managing||groupDraft!==undefined?-1:editing?editorSession:0);},drop=>{readingDrops=Math.max(0,readingDrops-1);const target=dropTargets.get(drop.id);dropTargets.delete(drop.id);if(managing||groupDraft!==undefined||target===undefined||target<0||target===0&&editing||target>0&&(!editing||target!==editorSession))return;if(drop.error){error=drop.error;return;}if(target===0)edit(null);droppedTracks=drop.tracks;}).then(stop=>{if(disposed)stop();else unlistenDrops=stop;}).catch(e=>error=String(e));
     if(desktop)void listenDesktop(desktopAction).then(stop=>{if(disposed)stop();else unlisten=stop;}).catch(e=>error=String(e));
     let publishing=false;const publisher=setInterval(()=>{if(!desktop||publishing)return;publishing=true;void publish().catch(()=>{}).finally(()=>publishing=false);},250);
-    return () => {disposed=true;unlisten?.();unlistenDrops?.();clearInterval(publisher);player?.dispose();};
+    return () => {disposed=true;unlisten?.();unlistenDrops?.();clearInterval(publisher);browserMedia?.dispose();player?.dispose();};
   });
   async function importLibrary() {
     busy = true; error = '';
@@ -114,6 +117,7 @@
 </script>
 
 <svelte:window onkeydown={(event) => {
+  const mediaAction=mediaKeyAction(event);if(mediaAction){event.preventDefault();desktopAction(mediaAction);return;}
   if(editing || managing || notificationDetails || groupDraft!==undefined || !['Stations','Player'].includes(view) || event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
   if(event.code==='Space'&&event.target instanceof HTMLElement&&event.target.closest('button'))return;
   if(event.code === 'Space') { event.preventDefault(); toggle(); }
@@ -130,7 +134,7 @@
       <button class="brand" onclick={()=>showView('Stations')} aria-label="Radio Replay home"><span class="signal">◉</span><span><b>RADIO REPLAY</b><small>LOCAL BROADCAST SYSTEM</small></span></button>
       <button class="choose" onclick={()=>edit(null)} disabled={busy||!desktop}>＋ CREATE STATION</button>
       <button class="choose secondary" onclick={()=>managing=true} disabled={busy||!desktop}>MANAGE STATIONS</button>
-      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
+      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><button class="config-action" onclick={mini} disabled={!desktop}>Mini player</button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
       <div class="groupbar group-selector">
         <select aria-label="Station group" bind:value={groupId} onchange={changeGroup}><option value="all">All stations</option>{#each groups as group}<option value={group.id}>{group.name}</option>{/each}</select>
         <button aria-label="Create group" title="Create group" onclick={()=>groupDraft=null} disabled={!desktop}>＋</button>
@@ -140,7 +144,6 @@
       <nav id="stationList" aria-label="Radio stations">
         {#each sections as [heading,list]}<section class="game">{#if heading}<h2>{heading}</h2>{/if}{#each list as station}<button class="station sidebar-station" class:active={playback?.key===station.key} aria-current={playback?.key===station.key?'true':undefined} onclick={()=>tune(station)}><span>{station.station}</span><small>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'broadcast'}</small></button>{/each}</section>{:else}<div class="empty">{busy?'Loading stations…':'No stations in this group.'}</div>{/each}
       </nav>
-      <div class="sidebar-tools"><button onclick={mini} disabled={!desktop}>Mini player</button><button onclick={importLibrary} disabled={busy||!desktop}>Import library</button><button onclick={()=>quitDesktop().catch(e=>error=String(e))} disabled={!desktop}>Quit</button></div>
     </aside>
     <section class="deck">
       {#if readingDrops}<div class="notice" role="status">Reading dropped audio…</div>{/if}
@@ -180,4 +183,4 @@
 {#if notificationDetails}<ProblemDetails notification={notificationDetails} oncancel={()=>notificationDetails=null} ondismiss={()=>{dismissNotification(notificationDetails!.id);notificationDetails=null;}} onedit={config.custom.some(station=>station.key===notificationDetails?.stationKey)?()=>{const station=config.custom.find(station=>station.key===notificationDetails?.stationKey);notificationDetails=null;if(station)edit(station);}:undefined}/>{/if}
 {#if editing}{#key editTarget?.key}<StationEditor station={editTarget} logo={editTarget?config.logos[editTarget.key]:''} settings={config.settings} incoming={droppedTracks} onsaved={saved} oncancel={()=>editing=false}/>{/key}{/if}
 {#if groupDraft!==undefined}<Groups {config} group={groupDraft} onsaved={groupSaved} oncancel={()=>groupDraft=undefined}/>{/if}
-{#if managing}<ManageStations {config} onsaved={next=>{saved(next);managing=false;}} onedit={station=>{managing=false;edit(station);}} oncancel={()=>managing=false}/>{/if}
+{#if managing}<ManageStations {config} onimport={()=>{managing=false;void importLibrary();}} onsaved={next=>{saved(next);managing=false;}} onedit={station=>{managing=false;edit(station);}} oncancel={()=>managing=false}/>{/if}

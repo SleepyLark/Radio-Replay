@@ -1,10 +1,10 @@
 /* Use the Electron app's original visual system, in its original cascade order. */
-@import '../../src/renderer/styles.css';
-@import '../../src/renderer/enhancements.css';
-@import '../../src/renderer/editor.css';
-@import '../../src/renderer/home.css';
-@import '../../src/renderer/settings.css';
-@import '../../src/renderer/customization.css';
+@import './theme/styles.css';
+@import './theme/enhancements.css';
+@import './theme/editor.css';
+@import './theme/home.css';
+@import './theme/settings.css';
+@import './theme/customization.css';
 
 /* Svelte component boundaries and the persistent bottom player are the additions. */
 body {
@@ -52,24 +52,11 @@ fieldset {
 .brand .signal {
   flex: none;
 }
-.sidebar-tools {
-  flex: none;
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 16px 4px 0;
-  border-top: 1px solid var(--line);
-}
-.sidebar-tools button {
-  padding: 0;
-  border: 0;
-  color: var(--muted);
-  background: none;
-  font: 10px 'DM Mono';
-}
-.sidebar-tools button:hover {
-  color: var(--green);
-}
+.sidebar-meta { flex-wrap: wrap; gap: 8px; }
+.sidebar-meta .library-path { margin-left: auto; }
+.manage-import { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.manage-import small { color:var(--muted); }
+.settings-exit { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:24px; }
 .deck {
   height: 100%;
   overflow: auto;

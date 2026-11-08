@@ -83,7 +83,7 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
     }
     let mut config = Config::default();
     let art = directory.join("fixture.png");
-    std::fs::write(&art, include_bytes!("../../../assets/icons/radio.png"))?;
+    std::fs::write(&art, include_bytes!("../../assets/icons/radio.png"))?;
     for (key, name) in [("a", "Native A"), ("b", "Native B")] {
         let mut extra = serde_json::Map::new();
         extra.insert("mode".into(), "longset".into());

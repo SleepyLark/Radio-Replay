@@ -199,7 +199,7 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("Missing tray icon")?
                 .clone(),
         )
-        .tooltip("Radio Replay Preview")
+        .tooltip("Radio Replay")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -243,7 +243,7 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(windows))]
     let hwnd = None;
     match MediaControls::new(PlatformConfig {
-        display_name: "Radio Replay Preview",
+        display_name: "Radio Replay",
         dbus_name: "radio_replay_preview",
         hwnd,
     }) {

@@ -2,6 +2,7 @@
   import {untrack, onDestroy} from 'svelte';
   import {desktop, saveSettings, clearMetadataCache, chooseAudio, recoverLegacyLibrary, openConfig, type Config} from './library';
   import {fadeSeconds} from './playback/timeline';
+  import {quitDesktop} from './desktop';
   let {config,onsaved,oncachecleared,onback,onerror}: {config:Config; onsaved:(config:Config)=>void; oncachecleared:()=>void; onback:()=>void; onerror:(message:string)=>void}=$props();
   const initial=untrack(()=>config.settings);
   let category=$state('General'), status=$state(''), error=$state(''), busy=$state(false);
@@ -11,7 +12,7 @@
   let density=$state(initial.listDensity==='compact'?'compact':'comfortable'), layout=$state(initial.bannerLayout==='column'?'column':'row');
   let scanlines=$state(initial.showScanlines!==false), matchBanner=$state(initial.matchBannerAccent!==false), bounceSpeed=$state(Number(initial.bounceSpeed)||25);
   let tuningTransition=$state(initial.tuningTransition!==false), tuningMinMs=$state(Number(initial.tuningMinMs)||0), tuningMaxMs=$state(Number(initial.tuningMaxMs??1500)), staticPath=$state(initial.staticPath==='off'?'':String(initial.staticPath??'bundled'));
-  let queued:Record<string,unknown>={}, saving=false, timer:ReturnType<typeof setTimeout>|undefined;
+  let queued:Record<string,unknown>={}, saving=$state(false), timer:ReturnType<typeof setTimeout>|undefined;
   function queue(patch:Record<string,unknown>){Object.assign(queued,patch);clearTimeout(timer);status='Saving…';error='';timer=setTimeout(()=>void flush(),180);}
   async function flush(){clearTimeout(timer);if(saving||!Object.keys(queued).length)return;saving=true;const patch=queued;queued={};try{const next=await saveSettings(patch);onsaved(next);onerror('');error='';status='Saved';}catch(e){queued={...patch,...queued};error=String(e);onerror(error);status='Changes not saved';saving=false;return;}saving=false;if(Object.keys(queued).length)void flush();}
   onDestroy(()=>{void flush();});
@@ -49,5 +50,5 @@
     </section>
   </fieldset>
   <p role="status" aria-live="polite">{status}</p>{#if error}<p class="error" role="alert">{error}</p><button onclick={()=>void flush()}>Retry save</button>{/if}
-  <button class="settings-back" onclick={onback}>← Back to stations</button>
+  <div class="settings-exit"><button class="settings-back" onclick={onback}>← Back to stations</button><button disabled={!desktop||saving} onclick={()=>void flush().then(()=>{if(!error)return quitDesktop();}).catch(e=>{error=String(e);onerror(error);})}>Quit Radio Replay</button></div>
 </section>

@@ -1,5 +1,5 @@
 // Test-only Tauri adapter. Exercises the built UI without touching a real library.
-const { contextBridge } = require('electron');
+const contextBridge={exposeInMainWorld:(key,value)=>{window[key]=value;}};
 let config = {
   root: '',
   custom: [
@@ -181,3 +181,8 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
     }
   },
 });
+
+const mediaHandlers=new Map();
+const setMediaAction=navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+navigator.mediaSession.setActionHandler=(name,handler)=>{mediaHandlers.set(name,handler);setMediaAction(name,handler);};
+window.__testMediaAction=name=>mediaHandlers.get(name)?.({action:name});

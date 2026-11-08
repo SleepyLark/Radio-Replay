@@ -1,217 +1,63 @@
 # Radio Replay
 
-Radio Replay turns your own audio collection into a desktop radio experience. Create shuffled music stations, tune into complete radio recordings, organize stations into groups, and give each one its own artwork and visual style.
+A local radio player built with Rust, Tauri 2 and Svelte 5. Create stations from your music collection, tune between broadcasts and shuffled music, and use the mini player or system media controls while listening.
 
-The player is inspired by the station tuning found in games such as Grand Theft Auto, but it includes no game audio, music, artwork, or other copyrighted game assets. You supply the audio you want to play.
+The Rust application is now the primary project and runs from the repository root. The original Electron application remains available in Git history.
 
-> [!IMPORTANT]
-> This app was made heavily with the assistance of AI. If you don't like it, don't use it.
+## Run on Windows
 
-<p align="center">
-  <img
-    src="docs/images/home.png"
-    alt="Radio Replay home screen with custom stations"
-    width="450"
-  >
-    <img
-    src="docs/images/station.png"
-    alt="station editor"
-    width="450"
-  >
-</p>
-<p align = "center">
-    <img
-    src="docs/images/player.png"
-    alt="now playing screen"
-    width="450"
-  >
-      <img
-    src="docs/images/lyrics.png"
-    alt="lyrics"
-    width="450"
-  >
-</p>
+Install Node.js 24 LTS, stable Rust, Microsoft C++ Build Tools with the Desktop development with C++ workload, and the Microsoft Edge WebView2 runtime.
 
-## Download
+Open PowerShell in the repository root:
 
-Ready-to-run Windows, Linux, and macOS builds are attached to each project release. Download the build for your system from the [Releases page](../../releases) and run Radio Replay.
-
-Release builds include everything required to use the app. You do not need Node.js, npm, or a development environment unless you want to build Radio Replay from source.
-
-> [!WARNING]
-> Release builds are currently unsigned. Windows may show a SmartScreen warning, and macOS may require you to approve the app in Privacy & Security before opening it for the first time.
-
-## Major features
-
-- Create stations from individual audio files or an entire folder.
-- Shuffle a collection as a music station or play long recordings in order as a radio broadcast.
-- Keep station timelines moving while you listen elsewhere, giving each station the feel of a continuous broadcast.
-- Organize whole stations or selected tracks into custom groups.
-- Add station logos, animated GIFs, background images, colors, and accent colors.
-- Display embedded track information and synchronized `.lrc` lyrics or track listings.
-- Set global or per-station crossfades for shuffled music stations.
-- Tune with the interface, keyboard, mouse wheel, or system media controls.
-- Customize tuning static, transition timing, scanlines, motion, station layout, and other appearance settings.
-- Cache track durations so stations tune more quickly after their first use.
-- Run locally without an account, internet connection, or music service.
-
-Supported audio formats are MP3, M4A, AAC, OGG, WAV, and FLAC.
-
-## Getting started
-
-### 1. Create a station
-
-Open Radio Replay and select **Create station**. Add individual audio files, choose a folder, or drag audio files into the app.
-
-Choose how imported files should be grouped:
-
-- **One station with all files** creates a single station containing the full selection.
-- **One station per file** creates a separate station for every imported file.
-
-When a folder is imported, its name is used as the station name if the name field is empty. You can add more files by dropping them into the station editor or by using **Add files** and **Add folder**.
-
-### 2. Choose a playback style
-
-- **Music station** shuffles the station's tracks and can crossfade between them.
-- **Radio broadcast** plays recordings in the order shown, then loops back to the beginning. Files up to 10 minutes and 64 MB are decoded and scheduled together for gapless playback. Larger recordings use streaming playback. Broadcasts have no crossfade by default; you can set one under **Edit station → Advanced**.
-
-If one of the sampled files is at least 20 minutes long, Radio Replay suggests broadcast playback. This is only a suggestion; you can choose either style.
-
-For broadcasts containing several recordings, use the controls beside each file or folder to arrange the playback order.
-
-### 3. Customize the station
-
-You can change the station name and files, add a logo or background (supports .PNG, .JPG, .WEBP, and .GIF), choose colors, enable logo rotation, and override playback or timestamp settings.
-
-Use **Manage stations** to edit or remove stations later. Removing a station from Radio Replay never deletes its source audio or artwork.
-
-### 4. Tune in
-
-Select a station from the home screen or sidebar. A station begins at a random point the first time you tune to it during a session. Its timeline continues to advance while you listen to another station, without playing hidden audio in the background.
-
-Station timelines reset when Radio Replay closes.
-
-## Player controls
-
-| Action                   | Control                                                      |
-| ------------------------ | ------------------------------------------------------------ |
-| Play or pause            | **Space** or the system Play/Pause key                       |
-| Next or previous station | **Down / Up**, player controls, or system Next/Previous keys |
-| Adjust volume            | **+ / −**, drag the volume meter, or scroll over it          |
-| Mute                     | **M** or the speaker button                                  |
-| Tune with the mouse      | Scroll over the player view                                  |
-
-The progress line shows the position within the current recording and is read-only.
-
-The optional **random station** setting changes Next into a random tuner within the selected group. Previous retraces recently tuned stations, and Next follows that history forward before choosing another random station.
-
-## Groups
-
-Groups provide smaller station lineups without changing the stations themselves. A group can include complete stations or selected tracks from music stations.
-
-Create or edit groups from the group menu, then use the selector above the sidebar to switch between them.
-
-## Lyrics and timestamped track listings
-
-Place an `.lrc` file beside an audio file and give it the same base name:
-
-```text
-My Broadcast.mp3
-My Broadcast.lrc
-```
-
-Radio Replay reads standard timestamped lines:
-
-```text
-[00:00.00]Opening
-[03:42.50]Next song
-```
-
-For music stations, timed text is shown as synchronized lyrics by default. For broadcasts, it is used as the current track or segment title. You can change this under **Edit station → Advanced → Use timestamped text as**.
-
-Timestamped `.txt` files with the same syntax are also supported. Untimed text and malformed timestamps are ignored. Note that currently it only supports timestamps formatted as `[mm:ss.ms]`; it currently does **not** support `[hh:mm:ss.ms]`, meaning 2 hours would be 240 minutes for the timestamp.
-
-## Settings and saved data
-
-Settings are saved automatically. The settings screen includes controls for appearance, playback, tuning transitions, static audio, random station selection, and the duration cache.
-
-Station definitions and settings are stored in `stations.json` inside Electron's user data directory. On Windows, this is normally:
-
-```text
-%APPDATA%\radio-replay\stations.json
-```
-
-Use **Settings → Open stations.json** to open its location. Audio and artwork remain in their original locations; Radio Replay stores paths to those files rather than copying them. The app also keeps the previous configuration as `stations.json.bak`.
-
-Track durations are stored separately in `duration-cache.sqlite`. Use **Settings → Advanced → Clear duration cache** to rebuild it without removing stations, settings, audio, or artwork.
-
-## Build from source
-
-Building from source requires:
-
-- Git
-- A current Node.js LTS release, including npm
-- The target operating system when building a distributable locally
-
-Clone or download this repository, open a terminal in its root directory, and install the exact dependency versions recorded in `package-lock.json`:
-
-```sh
+```powershell
 npm ci
+npm run desktop
 ```
 
-Start the development build:
+`npm start` also launches the desktop app. `npm run dev` opens a browser layout preview without local filesystem access.
 
-```sh
-npm start
+## Build an installer
+
+```powershell
+npm run package -- --bundles nsis
 ```
 
-The development build does not reload automatically. Restart it after changing source files.
+The installer is in `target/release/bundle/nsis/`. The standalone application is `target/release/radio-replay-desktop.exe`. Build from the repository root; the former `rewrite/` working directory is no longer used.
 
-To create a distributable for the current platform:
+## Library and playback
 
-```sh
-# Windows x64 portable executable
-npm run package:win
+- Create and edit stations from the sidebar. Manage Stations includes Import Library and bulk removal. Import selects a `stations.json` file and copies its configuration; music files stay in their original locations.
+- Mini Player is beside Settings. Quit Radio Replay is in Settings. Closing the main window exits by default; keeping playback in the tray is an opt-in setting.
+- Space plays/pauses, up/down tune stations, M mutes, and +/− adjust volume. Keyboard media keys and system media controls also control playback.
+- Duration and metadata caches use SQLite and file signatures. Errors appear in dismissible notifications with a searchable list of affected files.
+- Audio uses the platform WebView's codecs. An `.m4a` extension alone does not guarantee support for the codec stored inside the container.
 
-# Linux x64 AppImage
-npm run package:linux
+The existing `com.local.radioreplay.preview` data identifier is intentionally retained so current Rust users keep their stations, settings and SQLite cache. On Windows its data is under `%APPDATA%\com.local.radioreplay.preview`.
 
-# macOS Intel ZIP
-npm run package:mac:x64
+## Development
 
-# macOS Apple Silicon ZIP
-npm run package:mac:arm64
+```powershell
+npm run check
+npm run test:playback
+cargo test -p radio-replay-core --locked
+cargo check -p radio-replay-desktop --locked
+npm run test:ui
+npm run test:audio
 ```
 
-The packaged application is written to `release/`.
+UI and audio integration tests use Playwright with installed Microsoft Edge, without Electron. To use a different supported browser channel, set `RADIO_REPLAY_BROWSER`. Tests use fixtures and do not edit your music library.
 
-## Development commands
+The optional native integration harness exercises WebView2, IPC, SQLite caching, tray behavior and mini-player controls with an isolated profile:
 
-| Command                     | Purpose                                             |
-| --------------------------- | --------------------------------------------------- |
-| `npm start`                 | Run Radio Replay from source                        |
-| `npm run package:win`       | Build the portable Windows application              |
-| `npm run package:linux`     | Build the Linux x64 AppImage                        |
-| `npm run package:mac:x64`   | Build the macOS Intel ZIP                           |
-| `npm run package:mac:arm64` | Build the macOS Apple Silicon ZIP                   |
-| `npm run format`            | Format project files with Prettier                  |
-| `npm run format:check`      | Check formatting without changing files             |
-| `npm run check`             | Check JavaScript syntax                             |
-| `npm run test:cache`        | Test duration-cache persistence and invalidation    |
-| `npm run test:metadata`     | Test metadata parsing in Electron's utility process |
-| `npm run smoke`             | Run the Electron integration smoke test             |
-| `npm run icons`             | Regenerate app icons after editing the source SVG   |
+```powershell
+npm exec tauri -- build --debug --no-bundle --features native-smoke --config src-tauri/tauri.smoke.conf.json
+$env:RADIO_REPLAY_NATIVE_SMOKE_DIR = "$PWD\out\native-smoke"
+& .\target\debug\radio-replay-desktop.exe
+Remove-Item Env:RADIO_REPLAY_NATIVE_SMOKE_DIR
+Get-Content .\out\native-smoke\report.json
+```
 
-## Project layout
+`crates/core` contains library persistence, file validation, metadata, cache and station clock logic. `src-tauri` contains the native shell and restricted desktop commands. `ui` contains the Svelte interface and Web Audio playback engine. Theme styles and licensed fonts are preserved in `ui/theme`; shared assets are in `assets`. No LiMusic code or assets are included.
 
-| Path                       | Purpose                                                 |
-| -------------------------- | ------------------------------------------------------- |
-| `src/main.cjs`             | Electron window, file dialogs, IPC, and app lifecycle   |
-| `src/preload.cjs`          | Restricted bridge between the renderer and Electron     |
-| `src/metadata-service.cjs` | Isolated audio metadata and duration requests           |
-| `src/renderer/`            | Player interface, station editor, styling, and playback |
-| `assets/`                  | App icons and the default tuning-static sound           |
-| `tests/`                   | Cache and Electron integration tests                    |
-| `package.json`             | Dependencies, scripts, and packaging configuration      |
-
-Radio Replay is built with Electron and uses `music-metadata` for isolated audio metadata and duration parsing.
+GitHub Actions checks Rust and the frontend across Windows, Linux and macOS. A manual workflow run or version tag also builds a Windows installer. Linux and macOS still need native playback and media-key testing on their target systems.
