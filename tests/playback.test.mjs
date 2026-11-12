@@ -556,6 +556,30 @@ test('zero-fade streaming uses the preloaded track without reassigning its sourc
   } finally {player.dispose();}
 });
 
+test('mute remembers the volume, while changing volume unmutes at the new level',async()=>{
+  const {player}=setup();
+  try {
+    await player.tune(station('volume',[track('a'),track('b')]));
+    player.mute();
+    assert.equal(player.state.volume,.8);
+    assert.equal(player.current.volume,0);
+    player.mute();
+    assert.equal(player.current.volume,.8);
+    player.mute();
+    player.setVolume(.35);
+    assert.equal(player.state.muted,false);
+    assert.equal(player.state.volume,.35);
+    assert.equal(player.current.volume,.35);
+    player.mute();
+    player.mute();
+    assert.equal(player.current.volume,.35);
+    player.mute();
+    player.setVolume(0);
+    assert.equal(player.state.muted,false);
+    assert.equal(player.current.volume,0);
+  } finally {player.dispose();}
+});
+
 test('over-budget broadcast estimates stream without fetching or decoding buffers', async () => {
   const context = new ContextFake();
   let fetched = 0, decoded = 0;

@@ -51,13 +51,8 @@ void (async () => {
       volume.value = '.25';
       volume.dispatchEvent(new Event('input', { bubbles: true }));
       await until(
-        () => document.querySelector('.volume-value')?.textContent === '0%',
-        'Muted snapshot not reflected in volume meter',
-      );
-      document.querySelector('[aria-label="Unmute"]').click();
-      await until(
-        () => document.querySelector('.volume-value')?.textContent === '25%',
-        'Mini stepped volume did not follow main state',
+        () => document.querySelector('.volume-value')?.textContent === '25%'&&document.querySelector('[aria-label="Mute"]'),
+        'Moving the mini volume slider did not unmute to the new level',
       );
       assert(
         document.querySelectorAll('.volume-segments .lit').length === 3,
@@ -234,6 +229,8 @@ void (async () => {
       });
       await wait(200);
       assert((await invoke('desktop_snapshot')).playing, 'Closing to tray stopped the player');
+      if(!document.querySelector('[aria-label="Mini player"]'))document.querySelector('.compact-title')?.click();
+      await until(()=>document.querySelector('[aria-label="Mini player"]'),'Player PIP button missing');
       document.querySelector('[aria-label="Mini player"]').click();
       await until(
         () => document.querySelector('.now-playing strong')?.textContent === 'Native B',

@@ -54,7 +54,9 @@ fieldset {
 }
 .sidebar-meta { flex-wrap: wrap; gap: 8px; }
 .sidebar-meta .library-path { margin-left: auto; }
-.sidebar-meta .mini-action { display:inline-flex; align-items:center; justify-content:center; }
+.player-tools { display:flex; align-items:center; gap:12px; }
+.mini-action { display:inline-flex; align-items:center; justify-content:center; background:transparent; border:1px solid transparent; color:var(--muted); padding:4px; }
+.mini-action:hover { color:var(--green); border-color:var(--line); }
 /* The tuned row already has the selected background and accent border. */
 .sidebar-station.active:focus-visible { outline:none; }
 .manage-import { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0; }

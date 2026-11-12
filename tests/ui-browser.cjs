@@ -283,7 +283,7 @@ const server = http.createServer((req, res) => {
         assert(document.querySelectorAll('.volume-segments .lit').length===5,'Volume segments did not follow snapshot');
         window.__testEmit('mini-state',{...fixture,muted:true});await wait(30);assert(document.querySelectorAll('.volume-segments .lit').length===0,'Muted volume segments remain lit');
         document.querySelector('.volume-module').dispatchEvent(new WheelEvent('wheel',{deltaY:-100,bubbles:true,cancelable:true}));await wait(20);
-        assert(window.__testMessages().some(c=>c.type==='volume'&&Math.abs(c.value-.85)<.001),'Volume wheel not forwarded');
+        assert(window.__testMessages().some(c=>c.type==='volume'&&Math.abs(c.value-.05)<.001),'Volume wheel did not start from the muted slider position');
         window.__testEmit('mini-state',{...fixture,banner:location.origin+'/missing-banner.png'});for(let i=0;i<100&&document.querySelector('.mini-banner');i++)await wait(20);
         assert(!document.querySelector('.mini-banner'),'Broken banner did not fall back');
         window.__testEmit('mini-state',{...fixture,banner:'',seconds:0,duration:0});await wait(30);assert(!document.querySelector('.mini-banner')&&document.querySelector('[aria-label="Playback time"]').textContent==='00:00 / 00:00','Empty station fallback failed');
@@ -310,6 +310,18 @@ const server = http.createServer((req, res) => {
         document.querySelector('.bulk-row .station-edit').click();
         await until(()=>document.querySelector('#fileList'),'Large editor missing');
         assert(document.querySelectorAll('.file-row').length===100,'Editor rendered the entire library');
+        assert(!document.querySelector('.file-number')&&!document.querySelector('.file-row [aria-label^="Move "]'),'Music station exposes ordering controls');
+        button('Radio broadcast').click();await until(()=>document.querySelector('[aria-label="Move Album 1 folder to first"]'),'Broadcast folder controls missing');
+        document.querySelector('[aria-label="Move Album 1 folder to first"]').click();
+        await until(()=>document.querySelector('.file-folder summary > span')?.textContent==='Album 1','Folder did not move to first');
+        document.querySelector('.file-folder').open=true;
+        await until(()=>document.querySelector('[aria-label="Remove Track 1000"]'),'Moved folder did not expand');
+        assert(document.querySelector('[aria-label="Remove Track 1000"]').closest('.file-row').querySelector('.file-number').textContent==='1','Moved folder did not update broadcast order');
+        document.querySelector('[aria-label="Move Album 1 folder down"]').click();
+        await until(()=>document.querySelector('.file-folder summary > span')?.textContent==='Album 0','Folder down did not restore order');
+        document.querySelectorAll('.file-folder')[1].open=false;
+        await until(()=>document.querySelectorAll('.file-row').length===100,'Folder collapse did not release rows');
+        button('Music station').click();await until(()=>!document.querySelector('.file-number'),'Music station retained broadcast numbering');
         document.querySelector('.file-more').click();await until(()=>document.querySelectorAll('.file-row').length===200,'More files did not load');
         document.querySelector('[aria-label="Remove Track 150"]').click();
         await until(()=>!document.querySelector('[aria-label="Remove Track 150"]'),'Paged track could not be removed');

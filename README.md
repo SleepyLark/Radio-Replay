@@ -28,7 +28,9 @@ The installer is in `target/release/bundle/nsis/`. The standalone application is
 ## Library and playback
 
 - Create and edit stations from the sidebar. Manage Stations includes Import Library and bulk removal. Import selects a `stations.json` file and copies its configuration; music files stay in their original locations.
-- Mini Player is beside Settings. Quit Radio Replay is in Settings. Closing the main window exits by default; keeping playback in the tray is an opt-in setting.
+- Mini Player is beside the tuning hint on the main player screen. Quit Radio Replay is in Settings. Closing the main window exits by default; keeping playback in the tray is an opt-in setting.
+- Mute displays zero volume while remembering the previous level. Unmute restores it; changing the volume control unmutes at the new level.
+- Radio broadcast editors can move individual files or whole folders up, down, or to the beginning. Music stations shuffle playback and hide reorder controls. Show stations.json in Advanced settings reveals the configuration file in its folder.
 - Space plays/pauses, up/down tune stations, M mutes, and +/− adjust volume. Keyboard media keys and system media controls also control playback.
 - Duration and metadata caches use SQLite and file signatures. Errors appear in dismissible notifications with a searchable list of affected files.
 - Audio uses the platform WebView's codecs. An `.m4a` extension alone does not guarantee support for the codec stored inside the container.

@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
       case 'desktop_snapshot':
         return snapshot;
       case 'desktop_open_mini':
+      case 'open_config':
       case 'desktop_restore':
       case 'desktop_quit':
         return null;

@@ -226,7 +226,7 @@ export class Playback {
     this.durations.clear();
   }
   setVolume(volume: number) {
-    this.emit({ volume: Math.max(0, Math.min(1, volume)) });
+    this.emit({ volume: Math.max(0, Math.min(1, volume)), muted: false });
     this.applyVolume();
   }
   mute() {

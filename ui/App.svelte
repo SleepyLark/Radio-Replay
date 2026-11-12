@@ -79,6 +79,7 @@
     tune(lineup[index<0?(direction>0?0:lineup.length-1):(index + direction + lineup.length) % lineup.length]);
   }
   function toggle() { if(playback?.playing) void player?.pause(); else void player?.play(); }
+  function adjustVolume(delta:number){player?.setVolume((playback?.muted?0:(playback?.volume??.8))+delta);}
   async function keyboardStep(direction:number) {
     const followFocus=document.activeElement?.matches('.sidebar-station');
     step(direction);
@@ -136,8 +137,8 @@
   if(event.key === 'ArrowDown') { event.preventDefault(); void keyboardStep(1); }
   if(event.key === 'ArrowUp') { event.preventDefault(); void keyboardStep(-1); }
   if(event.key.toLowerCase() === 'm') player?.mute();
-  if(event.key==='+'||event.key==='='){event.preventDefault();player?.setVolume((playback?.volume??.8)+.05);}
-  if(event.key==='-'){event.preventDefault();player?.setVolume((playback?.volume??.8)-.05);}
+  if(event.key==='+'||event.key==='='){event.preventDefault();adjustVolume(.05);}
+  if(event.key==='-'){event.preventDefault();adjustVolume(-.05);}
 }}/>
 
 <div class="shell">
@@ -146,7 +147,7 @@
       <button class="brand" onclick={()=>showView('Stations')} aria-label="Radio Replay home"><span class="signal">◉</span><span><b>RADIO REPLAY</b><small>LOCAL BROADCAST SYSTEM</small></span></button>
       <button class="choose" onclick={()=>edit(null)} disabled={busy||!desktop}>＋ CREATE STATION</button>
       <button class="choose secondary" onclick={()=>managing=true} disabled={busy||!desktop}>MANAGE STATIONS</button>
-      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><button class="config-action mini-action" aria-label="Mini player" title="Mini player" onclick={mini} disabled={!desktop}><ControlIcon name="pip"/></button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
+      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
       <div class="groupbar group-selector">
         <select aria-label="Station group" bind:value={groupId} onchange={changeGroup}><option value="all">All stations</option>{#each groups as group}<option value={group.id}>{group.name}</option>{/each}</select>
         <button aria-label="Create group" title="Create group" onclick={()=>groupDraft=null} disabled={!desktop}>＋</button>
@@ -170,7 +171,7 @@
         </section>
       {:else if view==='Player'&&active}
         <div id="playerView" class="radio-screen" onwheel={wheel}>
-          <header><button class="back-stations" onclick={()=>showView('Stations')}>← All Stations</button><span class="hint">↑ ↓ TO TUNE</span></header>
+          <header><button class="back-stations" onclick={()=>showView('Stations')}>← All Stations</button><div class="player-tools"><span class="hint">↑ ↓ TO TUNE</span><button class="mini-action" aria-label="Mini player" title="Mini player" onclick={mini} disabled={!desktop}><ControlIcon name="pip"/></button></div></header>
           <div class="now-playing">
             <StationBanner station={playingStation??active} logo={config.logos[active.key]} number={Math.max(1,lineup.findIndex(s=>s.key===active?.key)+1)} playing={playback?.playing} layout={config.settings.bannerLayout??'row'}/>
             <button class="logo-action edit-link" onclick={()=>edit(active)}>Edit station</button>

@@ -3,6 +3,7 @@
   import Dialog from './Dialog.svelte';
   import StationBanner from './StationBanner.svelte';
   import FileList from './FileList.svelte';
+  import {moveFolder} from './playlist';
   import {sampleBanner} from './appearance';
   import {fadeSeconds} from './playback/timeline';
   import {chooseAudio, chooseArtwork, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
@@ -28,6 +29,7 @@
   async function add(folder:boolean){await perform(async()=>merge(await chooseAudio(folder)));}
   function move(index:number,direction:number){const next=[...tracks];[next[index],next[index+direction]]=[next[index+direction],next[index]];tracks=next;}
   function removeTracks(paths:string[]){const removed=new Set(paths);tracks=tracks.filter(track=>!removed.has(track.path));}
+  function reorderFolder(folder:string,target:string|undefined,position:'before'|'after'|'first'){tracks=moveFolder(tracks,folder,target,position);}
   async function banner(){await perform(async()=>{const path=await chooseArtwork();if(!path)return;bannerPath=path;bannerAccent='';try{bannerAccent=await sampleBanner(artworkUrl(path));}catch{/* A failed sample keeps the selected image and default accent. */}});}
   async function save(){await perform(async()=>onsaved(await saveStation($state.snapshot({key,name,mode,tracks,logoPath,options:{textMode,crossfade:customFade?fade:null,bannerPath,bannerAccent,bannerColor:useColor?bannerColor:'',accent:useAccent?accent:'',spinLogo}}))));}
 </script>
@@ -40,8 +42,8 @@
       <p>Playback style</p><div class="preset-actions"><button type="button" aria-pressed={mode==='tracks'} onclick={()=>mode='tracks'}>Music station</button><button type="button" aria-pressed={mode==='longset'} onclick={()=>mode='longset'}>Radio broadcast</button></div>
       <p id="playbackHelp">{mode==='tracks'?'Files play in a shuffled order. Timestamps supply lyrics by default.':'Recordings play in order. Timestamps supply track titles by default.'}</p>
       <div class="file-actions"><button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button></div>
-      <p>{tracks.length} file{tracks.length===1?'':'s'}</p><p id="fileOrderHelp">Numbers show the file order for broadcasts. Use ↑ / ↓ to reorder.</p>
-      <FileList {tracks} onmove={move} onremove={removeTracks}/>
+      <p>{tracks.length} file{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
+      <FileList {tracks} reorder={mode==='longset'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
     </details>
     <details class="editor-section"><summary>Appearance</summary>
       <div class="editor-section"><strong>Station logo</strong><p>Set a PNG, JPG, WebP, or animated GIF for the station.</p><p>{logoPath||'None'}</p><div class="file-actions"><button type="button" onclick={()=>perform(async()=>{const path=await chooseArtwork();if(path)logoPath=path;})}>Choose logo</button><button type="button" disabled={!logoPath} onclick={()=>logoPath=''}>Remove logo</button></div><label class="editor-check"><input type="checkbox" bind:checked={spinLogo}/>Spin logo while playing</label></div>

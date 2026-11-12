@@ -1,6 +1,6 @@
 <script lang="ts">
   import {untrack, onDestroy} from 'svelte';
-  import {desktop, saveSettings, clearMetadataCache, chooseAudio, recoverLegacyLibrary, openConfig, type Config} from './library';
+  import {desktop, saveSettings, clearMetadataCache, chooseAudio, recoverLegacyLibrary, showConfig, type Config} from './library';
   import {fadeSeconds} from './playback/timeline';
   import {quitDesktop} from './desktop';
   let {config,onsaved,oncachecleared,onback,onerror}: {config:Config; onsaved:(config:Config)=>void; oncachecleared:()=>void; onback:()=>void; onerror:(message:string)=>void}=$props();
@@ -45,7 +45,7 @@
       <label>Maximum transition<input type="number" min="0" max="1500" step="1" required bind:value={tuningMaxMs} onchange={e=>{if(e.currentTarget.reportValidity())range();}}/> ms</label>
       <p>{staticPath==='bundled'?'Bundled static':staticPath?staticPath.split(/[\\/]/).at(-1):'Disabled'}</p><div class="settings-actions"><button onclick={chooseStatic}>Choose audio file</button><button onclick={()=>{staticPath='bundled';queue({staticPath});}}>Use bundled</button><button onclick={()=>{staticPath='';queue({staticPath});}}>Disable</button></div>
     </section>
-    <section data-settings-panel="advanced" hidden={category!=='Advanced'}><h2>Files and data</h2><div class="settings-actions"><button onclick={()=>openConfig().catch(e=>error=String(e))}>Open stations.json</button><button onclick={clear}>Clear metadata cache</button></div><p>Clearing cached metadata and durations frees their storage. Tracks are measured again as needed; your stations and audio files are kept.</p>
+    <section data-settings-panel="advanced" hidden={category!=='Advanced'}><h2>Files and data</h2><div class="settings-actions"><button onclick={()=>showConfig().catch(e=>error=String(e))}>Show stations.json</button><button onclick={clear}>Clear metadata cache</button></div><p>Clearing cached metadata and durations frees their storage. Tracks are measured again as needed; your stations and audio files are kept.</p>
       {#if config.root}<h2>Legacy archive</h2><p>{config.root}</p><button onclick={recover}>Recover archive stations</button>{/if}
     </section>
   </fieldset>

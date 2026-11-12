@@ -89,7 +89,7 @@ export const chooseArtwork = () => invoke<string | null>('choose_artwork');
 export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });
 export const deleteStation = (key: string) => invoke<Config>('delete_station', { key });
 export const deleteStations = (keys: string[]) => invoke<Config>('delete_stations', { keys });
-export const openConfig = () => invoke<void>('open_config');
+export const showConfig = () => invoke<void>('open_config');
 export interface AudioDrop {
   id: number;
   tracks: Track[];

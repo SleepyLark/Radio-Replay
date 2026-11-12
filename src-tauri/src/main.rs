@@ -371,17 +371,30 @@ fn open_config(
         let store = library.0.lock().map_err(|e| e.to_string())?;
         store.save(&store.load()?)?;
     }
+    // Keep the existing IPC permission, but reveal the file instead of editing it.
     #[cfg(target_os = "windows")]
-    let editor = "notepad.exe";
+    let mut command = {
+        let mut command = std::process::Command::new("explorer.exe");
+        command.arg("/select,").arg(&path);
+        command
+    };
     #[cfg(target_os = "macos")]
-    let editor = "open";
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(&path);
+        command
+    };
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let editor = "xdg-open";
-    std::process::Command::new(editor)
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&directory.0);
+        command
+    };
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 fn main() {
