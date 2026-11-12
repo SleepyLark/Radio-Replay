@@ -173,14 +173,6 @@ Browser integration tests use Playwright with installed Microsoft Edge. Set `RAD
 
 An isolated native integration harness also covers WebView2 playback, SQLite, tray behavior, and mini-player IPC. See [development validation](docs/development.md) for its commands.
 
-## GitHub Actions and releases
-
-Pushes and pull requests run version checks, frontend validation, and Rust checks on Windows, Linux, and macOS. Windows also runs browser UI/audio tests. A manual **Build and release** workflow run builds downloadable Windows artifacts without publishing a release.
-
-Pushing a matching version tag, such as **`v0.6.5`**, runs the checks, builds the Windows installer and standalone executable, verifies their checksums, and publishes them to GitHub Releases. Stable Rust releases are explicitly marked Latest; tags with prerelease suffixes are marked prereleases.
-
-See [the release guide](docs/releases.md) for the first push, GitHub settings, version changes, and troubleshooting. No personal access token or signing secret is required for unsigned releases; the workflow uses GitHub's built-in token with publishing permission limited to its release job.
-
 ## Project layout
 
 | Path | Purpose |
