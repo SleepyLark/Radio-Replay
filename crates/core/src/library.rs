@@ -135,18 +135,18 @@ pub fn playback_report_for_group(
             .find(|g| g["id"].as_str() == Some(id))
             .and_then(|g| g["members"].as_array())
             .ok_or("Group unavailable")?
-            .clone();
+            .iter()
+            .filter_map(|member| member.as_str().map(str::to_owned))
+            .collect::<HashSet<String>>();
         let station = config
             .custom
             .iter_mut()
             .find(|s| s.key == key)
             .ok_or("Station unavailable")?;
-        if !members.iter().any(|m| m.as_str() == Some(key)) {
-            station.tracks.retain(|t| {
-                members
-                    .iter()
-                    .any(|m| m.as_str() == Some(&format!("{key}|{}", t.path)))
-            });
+        if !members.contains(key) {
+            station
+                .tracks
+                .retain(|t| members.contains(&format!("{key}|{}", t.path)));
         }
     }
     playback_report(&config, key)
@@ -366,10 +366,17 @@ pub fn upsert(
         })
         .unwrap_or_default();
     let mut seen = HashSet::new();
+    let previous_paths: HashSet<&str> = existing
+        .map(|i| {
+            config.custom[i]
+                .tracks
+                .iter()
+                .map(|t| t.path.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
     for track in &edit.tracks {
-        let retained = existing
-            .map(|i| config.custom[i].tracks.iter().any(|t| t.path == track.path))
-            .unwrap_or(false);
+        let retained = previous_paths.contains(track.path.as_str());
         if (!retained && !audio.contains(&track.path)) || !audio_file(Path::new(&track.path)) {
             return Err("Audio file was not selected".into());
         }
@@ -490,6 +497,38 @@ pub fn remove(config: &mut Config, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_retained_station_still_rejects_unselected_additions() {
+        let tracks: Vec<_> = (0..20_000)
+            .map(|i| Track {
+                path: format!("track-{i}.mp3"),
+                name: format!("Track {i}"),
+                extra: Default::default(),
+            })
+            .collect();
+        let mut config = Config::default();
+        config.custom.push(Station {
+            key: "large".into(),
+            station: "Large".into(),
+            tracks: tracks.clone(),
+            extra: Default::default(),
+        });
+        let mut request = edit();
+        request.key = "large".into();
+        request.tracks = tracks;
+        upsert(&mut config, request, &HashSet::new(), &HashSet::new()).unwrap();
+        assert_eq!(config.custom[0].tracks.len(), 20_000);
+        let mut request = edit();
+        request.key = "large".into();
+        request.tracks = config.custom[0].tracks.clone();
+        request.tracks.push(Track {
+            path: "not-picked.mp3".into(),
+            name: "Not picked".into(),
+            extra: Default::default(),
+        });
+        assert!(upsert(&mut config, request, &HashSet::new(), &HashSet::new()).is_err());
+        assert_eq!(config.custom[0].tracks.len(), 20_000);
+    }
     #[test]
     fn recovers_legacy_layout_without_overwriting_custom_stations_or_references() {
         let dir = tempfile::tempdir().unwrap();
@@ -621,9 +660,16 @@ mod tests {
         assert!(report.problems[0].reason.contains("File not found"));
         assert!(report.problems[1].reason.contains("not supported"));
         config.groups.push(serde_json::json!({"id":"good-only","members":[format!("station|{}",good.to_string_lossy())]}));
-        let subset = playback_report_for_group(config, "station", Some("good-only")).unwrap();
+        let subset =
+            playback_report_for_group(config.clone(), "station", Some("good-only")).unwrap();
         assert_eq!(subset.tracks.len(), 1);
         assert!(subset.problems.is_empty());
+        config
+            .groups
+            .push(serde_json::json!({"id":"whole-station","members":["station"]}));
+        let whole = playback_report_for_group(config, "station", Some("whole-station")).unwrap();
+        assert_eq!(whole.tracks.len(), 1);
+        assert_eq!(whole.problems.len(), 2);
     }
     #[test]
     fn dropped_audio_collects_folders_and_deduplicates_selected_files() {

@@ -28,6 +28,10 @@ for (const [key, station, mode] of [
 ])
   config.custom.push({ key, station, mode, tracks: [{ path: 'first.wav', name: 'First' }] });
 const calls = [];
+if(new URLSearchParams(location.search).has('large')) {
+  config.custom=[{key:'large',station:'Large Library',mode:'tracks',tracks:Array.from({length:20000},(_,i)=>({path:`C:/Fixture/Album ${Math.floor(i/1000)}/track-${i}.mp3`,name:`Track ${i}`}))}];
+}
+contextBridge.exposeInMainWorld('__testConfig',()=>config);
 const settingPatches = [];
 let rejectSetting = false;
 const messages = [];
@@ -101,7 +105,7 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         messages.push(args.action);
         return null;
       case 'load_config':
-        return config;
+        return structuredClone(config);
       case 'prepare_station': {
         const group = config.groups.find((g) => g.id === args.group);
         const station = config.custom.find((s) => s.key === args.key);
@@ -147,14 +151,14 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
             : s,
         );
         config.logos[edit.key] = edit.logoPath;
-        return config;
+        return structuredClone(config);
       }
       case 'save_group':
         config.groups = config.groups.filter((g) => g.id !== args.group.id).concat(args.group);
-        return config;
+        return structuredClone(config);
       case 'delete_group':
         config.groups = config.groups.filter((g) => g.id !== args.id);
-        return config;
+        return structuredClone(config);
       case 'save_settings':
         if (rejectSetting) {
           rejectSetting = false;
@@ -162,7 +166,7 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         }
         settingPatches.push(args.patch);
         config.settings = { ...config.settings, ...args.patch };
-        return config;
+        return structuredClone(config);
       case 'delete_stations': {
         const removed = new Set(args.keys);
         config.custom = config.custom.filter((s) => !removed.has(s.key));
@@ -172,7 +176,7 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
             (m) => ![...removed].some((k) => m === k || m.startsWith(k + '|')),
           ),
         }));
-        return config;
+        return structuredClone(config);
       }
       case 'clear_metadata_cache':
         return null;

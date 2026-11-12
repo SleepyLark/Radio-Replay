@@ -93,7 +93,16 @@ window.audioSmoke = async () => {
     assert(player.current !== first, 'Real audio crossfade did not swap streams');
     await player.pause();
     assert(player.current.paused && player.spare.paused, 'Pause did not stop both streams');
-    return 'Real audio smoke passed: looping tuning static, decode, scheduled gapless handoff, pause/resume, streaming crossfade, cleanup.';
+    await player.tune({key:'no-fade',station:'No fade',tracks,mode:'tracks',crossfade:0});
+    const preloaded=player.spare;
+    for(let i=0;i<100&&preloaded.readyState<2;i++)await wait(10);
+    assert(preloaded.readyState>=2,'Next stream did not preload');
+    let reloaded=false;
+    preloaded.addEventListener('emptied',()=>{reloaded=true;});
+    for(let i=0;i<200&&player.current!==preloaded;i++)await wait(10);
+    assert(player.current===preloaded&&!preloaded.paused,'Zero-fade boundary did not use the preloaded stream');
+    assert(!reloaded,'Preloaded stream was discarded at the zero-fade boundary');
+    return 'Real audio smoke passed: looping tuning static, decode, scheduled gapless handoff, pause/resume, streaming crossfade, preloaded zero-fade handoff, cleanup.';
   } finally {
     player.dispose();
     URL.revokeObjectURL(noiseUrl);

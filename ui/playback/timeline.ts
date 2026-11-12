@@ -28,7 +28,8 @@ export function clockFor(
   now: number,
   random = Math.random,
 ): Clock {
-  const fade = order.length > 1 ? Math.min(requestedFade, ...lengths.map((n) => n / 2)) : 0;
+  let fade = order.length > 1 ? requestedFade : 0;
+  for (const length of lengths) fade = Math.min(fade, length / 2);
   const steps = lengths.map((n) => n - fade);
   const total = steps.reduce((a, b) => a + b, 0);
   return { order, lengths, steps, fade, total, origin: now, offset: random() * total };

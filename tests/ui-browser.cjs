@@ -138,7 +138,7 @@ const server = http.createServer((req, res) => {
         assert(window.__testCalls().filter(c=>c==='prepare_station').length===callsBeforeVolume,'Volume wheel tuned stations');
         document.querySelector('[aria-label="Create group"]').click();await until(()=>document.querySelector('dialog')?.open,'Group dialog missing');
         const groupName=document.querySelector('dialog input');groupName.value='Favorites';groupName.dispatchEvent(new Event('input',{bubbles:true}));
-        document.querySelector('.member-list details').open=true;document.querySelector('.track-choice input').click();await wait(20);
+        document.querySelector('.member-list details').open=true;await until(()=>document.querySelector('.track-choice input'),'Track choices did not expand');document.querySelector('.track-choice input').click();await wait(20);
         button('Save group').click();await until(()=>!document.querySelector('dialog'),'Group did not save');
         assert(document.querySelector('.group-selector select').selectedOptions[0].textContent==='Favorites','New group not selected');
         assert(document.querySelectorAll('.sidebar-station').length===1,'Group filter did not apply');
@@ -298,6 +298,48 @@ const server = http.createServer((req, res) => {
         path.join(output, 'phase5-mini.png'),
         await page.screenshot(),
       );
+      await page.setViewportSize({width:1200,height:800});
+      await page.goto(`http://127.0.0.1:${server.address().port}/index.html?large=1`);
+      console.log(await page.evaluate(`(async()=>{
+        const wait=ms=>new Promise(r=>setTimeout(r,ms));
+        const until=async(test,message)=>{for(let i=0;i<200;i++){if(test())return;await wait(20);}throw new Error(message);};
+        const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+        const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
+        await until(()=>document.querySelector('.sidebar-station'),'Large library did not load');
+        button('MANAGE STATIONS').click();await until(()=>document.querySelector('dialog')?.open,'Large manager missing');
+        document.querySelector('.bulk-row .station-edit').click();
+        await until(()=>document.querySelector('#fileList'),'Large editor missing');
+        assert(document.querySelectorAll('.file-row').length===100,'Editor rendered the entire library');
+        document.querySelector('.file-more').click();await until(()=>document.querySelectorAll('.file-row').length===200,'More files did not load');
+        document.querySelector('[aria-label="Remove Track 150"]').click();
+        await until(()=>!document.querySelector('[aria-label="Remove Track 150"]'),'Paged track could not be removed');
+        assert(document.querySelectorAll('.file-row').length===200,'Page collapsed after editing');
+        document.querySelectorAll('.file-folder')[1].open=true;
+        await until(()=>document.querySelector('[aria-label="Remove Track 1000"]'),'Second folder did not expand');
+        document.querySelectorAll('.file-folder')[0].open=false;
+        await until(()=>!document.querySelector('[aria-label="Remove Track 0"]'),'Closed folder retained rows');
+        document.querySelectorAll('.file-folder')[1].querySelector('summary button').click();
+        await until(()=>document.querySelectorAll('.file-folder').length===19,'Remove folder only removed visible rows');
+        button('Cancel').click();await until(()=>!document.querySelector('dialog'),'Editor did not cancel');
+        assert(window.__testConfig().custom[0].tracks.length===20000,'Cancelled editor changed the library');
+        document.querySelector('[aria-label="Create group"]').click();
+        await until(()=>document.querySelector('dialog')?.open,'Large group editor missing');
+        assert(document.querySelectorAll('.track-choice').length===0,'Closed group station rendered tracks');
+        document.querySelector('.member-list details').open=true;
+        await until(()=>document.querySelectorAll('.track-choice').length===100,'Group expansion was not bounded');
+        document.querySelector('.group-more').click();await until(()=>document.querySelectorAll('.track-choice').length===200,'More group tracks did not load');
+        document.querySelectorAll('.track-choice input')[150].click();
+        document.querySelector('.member-list details').open=false;
+        await until(()=>document.querySelectorAll('.track-choice').length===0,'Collapsed group retained tracks');
+        document.querySelector('.member-list details').open=true;
+        await until(()=>document.querySelectorAll('.track-choice').length===100,'Group did not reopen on first page');
+        document.querySelector('.group-more').click();await until(()=>document.querySelectorAll('.track-choice').length===200,'Group page did not reopen');
+        assert(document.querySelectorAll('.track-choice input')[150].checked,'Hidden group selection was lost');
+        const name=document.querySelector('dialog input');name.value='Paged selection';name.dispatchEvent(new Event('input',{bubbles:true}));await wait(20);
+        button('Save group').click();await until(()=>!document.querySelector('dialog'),'Paged group did not save');
+        assert(window.__testConfig().groups[0].members[0]==='large|C:/Fixture/Album 0/track-150.mp3','Wrong paged track saved');
+        return '20,000-track UI passed: bounded rows, expansion, pagination, folder removal, cancel and hidden group selections.';
+      })()`));
       clearTimeout(timeout);
       await browser.close();
       server.close();

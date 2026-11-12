@@ -20,7 +20,7 @@
   import {stationAccent, sampleBanner} from './appearance';
   import type {Group} from './library';
   import {listenAudioDrops, type Track} from './library';
-  let config = $state(emptyConfig());
+  let config = $state.raw(emptyConfig());
   let query = $state('');
   let active = $state<Station | null>(null);
   let busy = $state(true);
@@ -37,7 +37,8 @@
   let editing = $state(false);
   let editTarget = $state<Station | null>(null);
   let player: Playback | null = null;
-  let playback = $state<PlaybackState | null>(null);
+  let playback = $state.raw<PlaybackState | null>(null);
+  const activeKey=$derived(playback?.key);
   const playbackNotice=$derived(playback?.notice);
   let groupId=$state('all');
   let history=new StationHistory();
@@ -142,7 +143,7 @@
       </div>
       <input id="stationSearch" type="search" aria-label="Search stations" placeholder="Search stations…" bind:value={query}/>
       <nav id="stationList" aria-label="Radio stations">
-        {#each sections as [heading,list]}<section class="game">{#if heading}<h2>{heading}</h2>{/if}{#each list as station}<button class="station sidebar-station" class:active={playback?.key===station.key} aria-current={playback?.key===station.key?'true':undefined} onclick={()=>tune(station)}><span>{station.station}</span><small>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'broadcast'}</small></button>{/each}</section>{:else}<div class="empty">{busy?'Loading stations…':'No stations in this group.'}</div>{/each}
+        {#each sections as [heading,list]}<section class="game">{#if heading}<h2>{heading}</h2>{/if}{#each list as station}<button class="station sidebar-station" class:active={activeKey===station.key} aria-current={activeKey===station.key?'true':undefined} onclick={()=>tune(station)}><span>{station.station}</span><small>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'broadcast'}</small></button>{/each}</section>{:else}<div class="empty">{busy?'Loading stations…':'No stations in this group.'}</div>{/each}
       </nav>
     </aside>
     <section class="deck">
@@ -151,7 +152,7 @@
       {#if view==='Stations'}
         <section id="homeView">
           <p class="home-kicker">YOUR RADIO</p><h1>Choose a station</h1><p id="homeSummary">{stations.length} station{stations.length===1?'':'s'} available</p>
-          <div id="homeStations">{#each stations as station}<button class="home-station" class:active={playback?.key===station.key} onclick={()=>tune(station)}>
+          <div id="homeStations">{#each stations as station}<button class="home-station" class:active={activeKey===station.key} onclick={()=>tune(station)}>
             {#if artworkUrl(config.logos[station.key])}<img src={artworkUrl(config.logos[station.key])} alt="" loading="lazy" decoding="async"/>{:else}<span class="home-icon">◉</span>{/if}
             <span>{#if station.game}<small>{String(station.game)}</small>{/if}<strong>{station.station}</strong><em>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'Continuous broadcast'}</em></span>
           </button>{:else}<p class="empty">{query?'No matching stations.':'No stations yet. Create one to get started.'}</p>{/each}</div>

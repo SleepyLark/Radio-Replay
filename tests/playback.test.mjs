@@ -227,6 +227,7 @@ class AudioFake extends EventTarget {
   loop = false;
   ended = false;
   plays = 0;
+  srcAssignments = 0;
   _src = '';
   constructor(lengths) {
     super();
@@ -236,6 +237,7 @@ class AudioFake extends EventTarget {
     return this._src;
   }
   set src(value) {
+    this.srcAssignments++;
     this._src = value;
     this.duration = this.lengths[value] ?? NaN;
     this.readyState = Number.isFinite(this.duration) ? 1 : 0;
@@ -256,6 +258,7 @@ class AudioFake extends EventTarget {
   load() {}
 }
 class ContextFake {
+  sampleRate = 48000;
   currentTime = 0;
   sources = [];
   state = 'suspended';
@@ -528,4 +531,75 @@ test('oversized decoded buffers fall back without retaining a context', async ()
   } finally {
     player.dispose();
   }
+});
+
+test('very large station clocks do not exceed the JavaScript argument limit', () => {
+  const count = 200000;
+  const clock = clockFor(Array(count).fill(track('a')), Array(count).fill(180), 5, 0, () => 0);
+  assert.equal(clock.fade, 5);
+  assert.equal(clock.total, count * 175);
+});
+
+test('zero-fade streaming uses the preloaded track without reassigning its source', async () => {
+  const {player} = setup();
+  try {
+    await player.tune(station('stream', [track('a'), track('b')]));
+    const next = player.spare;
+    const path = next.src;
+    const assignments = next.srcAssignments;
+    player.current.dispatchEvent(new Event('ended'));
+    await flush();
+    assert.equal(player.state.path, path);
+    assert.equal(next.paused, false);
+    assert.equal(next.srcAssignments, assignments, 'Preloaded media was loaded again');
+    assert.equal(player.state.playing, true);
+  } finally {player.dispose();}
+});
+
+test('over-budget broadcast estimates stream without fetching or decoding buffers', async () => {
+  const context = new ContextFake();
+  let fetched = 0, decoded = 0;
+  const {player} = setup({context, lengths:{a:500,b:500}});
+  player.options.fetchBytes = async () => {fetched++;return new ArrayBuffer(8);};
+  context.decodeAudioData = async () => {decoded++;return {duration:500,length:24000000,numberOfChannels:2};};
+  try {
+    await player.tune(station('large', [track('a'),track('b')], 'longset'));
+    assert.equal(player.state.engine, 'stream');
+    assert.equal(player.state.playing, true);
+    assert.equal(fetched, 0);
+    assert.equal(decoded, 0);
+    assert.equal(context.state, 'closed');
+  } finally {player.dispose();}
+});
+
+test('an unready preload falls back to loading the next stream', async () => {
+  const {player} = setup();
+  try {
+    await player.tune(station('unready', [track('a'),track('b')]));
+    const nextPath=player.spare.src;
+    player.spare.readyState=0;
+    player.current.dispatchEvent(new Event('ended'));
+    await flush();
+    assert.equal(player.state.path,nextPath);
+    assert.equal(player.state.playing,true);
+    assert.equal(player.current.paused,false);
+  } finally {player.dispose();}
+});
+
+test('buffer prefetch waits for capacity instead of decoding past the total budget', async () => {
+  const context=new ContextFake();
+  let fetched=0,decoded=0;
+  const {player}=setup({context,lengths:{a:160,b:160,c:160},prepare:async()=>[track('a'),track('b'),track('c')]});
+  player.options.fetchBytes=async()=>{fetched++;return new ArrayBuffer(8);};
+  context.decodeAudioData=async()=>{decoded++;return {duration:160,length:7680000,numberOfChannels:2};};
+  try {
+    await player.tune(station('capacity',[track('a'),track('b'),track('c')],'longset'));
+    await flush();
+    assert.equal(player.state.engine,'buffered');
+    assert.equal(fetched,2);
+    assert.equal(decoded,2);
+    context.sources[0].onended();
+    await flush();
+    assert.equal(decoded,3,'Prefetch did not resume after releasing the previous buffer');
+  } finally {player.dispose();}
 });

@@ -2,6 +2,11 @@ import type { PlayableTrack, Station, PreparedStation, TrackProblem } from '../l
 import { clockFor, fadeSeconds, position, shuffle, type Clock } from './timeline.ts';
 import { tuningMilliseconds } from './tuning.ts';
 
+const MAX_ENCODED_BYTES = 64 * 1024 * 1024;
+const MAX_DECODED_TRACK_BYTES = 64 * 1024 * 1024;
+const MAX_DECODED_TOTAL_BYTES = 128 * 1024 * 1024;
+const MAX_BUFFERED_SECONDS = 600;
+
 export interface PlaybackState {
   key: string;
   station: string;
@@ -423,8 +428,8 @@ export class Playback {
         station.mode === 'longset' &&
         !clock.fade &&
         clock.order.length > 1 &&
-        clock.lengths.every((n) => n <= 600) &&
-        clock.order.every((t) => t.size <= 64 * 1024 * 1024)
+        clock.lengths.every((n) => n <= MAX_BUFFERED_SECONDS) &&
+        clock.order.every((t) => t.size <= MAX_ENCODED_BYTES)
       ) {
         if (await this.startBuffered(at.seconds, token)) {
           if (token === this.token) this.emit({ loading: false });
@@ -455,11 +460,13 @@ export class Playback {
       transition.stop();
     }
   }
-  private async startStream(index: number, seconds: number, token: number) {
+  private async startStream(index: number, seconds: number, token: number, preloaded = false) {
     const clock = this.clock!;
     const element = this.current;
-    element.src = this.options.url(clock.order[index].path);
-    element.preload = 'auto';
+    if (!preloaded) {
+      element.src = this.options.url(clock.order[index].path);
+      element.preload = 'auto';
+    }
     element.loop = clock.order.length === 1;
     await this.ready(element, this.controller.signal);
     if (token !== this.token) return;
@@ -497,12 +504,18 @@ export class Playback {
     const clock = this.clock;
     const start = this.index;
     this.release(this.current);
-    this.release(this.spare);
     try {
       for (let attempted = 1; attempted <= clock.order.length; attempted++) {
         const index = (start + attempted) % clock.order.length;
+        const preloaded = attempted === 1 && this.spare.readyState >= 1 &&
+          !this.spare.error && this.spare.src === this.options.url(clock.order[index].path);
+        if (preloaded) {
+          [this.current, this.spare] = [this.spare, this.current];
+        } else {
+          this.release(this.spare);
+        }
         try {
-          await this.startStream(index, 0, token);
+          await this.startStream(index, 0, token, preloaded);
           if (token !== this.token) return;
           clock.origin = this.now();
           clock.offset = clock.steps.slice(0, index).reduce((a, b) => a + b, 0);
@@ -644,6 +657,15 @@ export class Playback {
     const track = this.clock!.order[index];
     const cached = state.buffers.get(track.path);
     if (cached) return cached;
+    // Conservatively estimate stereo float PCM before allocating a decoded buffer.
+    // Actual channel counts are checked again after decoding.
+    const estimatedBytes = this.clock!.lengths[index] * state.context.sampleRate * 2 * 4;
+    const retainedBytes = [...state.buffers.values()].reduce(
+      (total, buffer) => total + buffer.length * buffer.numberOfChannels * 4, 0,
+    );
+    if (estimatedBytes > MAX_DECODED_TRACK_BYTES ||
+        retainedBytes + estimatedBytes > MAX_DECODED_TOTAL_BYTES)
+      throw new Error('Recording exceeds estimated buffer budget');
     const bytes = await (
       this.options.fetchBytes ??
       (async (url, signal) => {
@@ -652,14 +674,14 @@ export class Playback {
         return response.arrayBuffer();
       })
     )(this.options.url(track.path), this.controller.signal);
-    if (bytes.byteLength > 64 * 1024 * 1024) throw new Error('Recording exceeds buffer limit');
+    if (bytes.byteLength > MAX_ENCODED_BYTES) throw new Error('Recording exceeds buffer limit');
     const buffer = await state.context.decodeAudioData(bytes);
     const memory = buffer.length * buffer.numberOfChannels * 4;
     if (
-      buffer.duration > 600 ||
-      memory > 64 * 1024 * 1024 ||
+      buffer.duration > MAX_BUFFERED_SECONDS ||
+      memory > MAX_DECODED_TRACK_BYTES ||
       [...state.buffers.values()].reduce((n, b) => n + b.length * b.numberOfChannels * 4, memory) >
-        128 * 1024 * 1024
+        MAX_DECODED_TOTAL_BYTES
     )
       throw new Error('Decoded audio exceeds buffer budget');
     state.buffers.set(track.path, buffer);
