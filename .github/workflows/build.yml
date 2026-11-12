@@ -53,6 +53,9 @@ jobs:
         with:
           key: check
       - run: npm ci
+      - name: Prepare bundled Windows audio runtime
+        if: runner.os == 'Windows'
+        run: npm run setup:mpv
       - run: npm run check
       - run: npm run test:playback
       - run: npm run build
@@ -98,7 +101,7 @@ jobs:
         with:
           key: windows-package
       - run: npm ci
-      - name: Build installer, executable and checksums
+      - name: Build installer, portable ZIP and checksums
         shell: pwsh
         run: ./scripts/package-windows.ps1
       - uses: actions/upload-artifact@v7

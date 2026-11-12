@@ -59,5 +59,11 @@ removes `target`, frontend/test output, and local build/download caches while
 preserving source, dependencies, the developer audio DLL, release deliverables,
 and application data. The next Rust build will take longer.
 
+For packaging-only edits, `pwsh -File scripts/package-windows.ps1 -BundleOnly`
+can rebundle an existing matching `target/release/radio-replay-desktop.exe`
+without compiling Rust again. Use the normal package command whenever the
+application code has changed. Both paths verify that the portable ZIP contains
+the expected audio DLL and licenses, and excludes the old end-user downloader.
+
 For the first large-library optimization measurements and remaining audit work,
 see [performance pass 1](performance-pass-1.md).

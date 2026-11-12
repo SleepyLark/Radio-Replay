@@ -23,10 +23,10 @@ Download the Rust build from [GitHub Releases](https://github.com/SleepyLark/Rad
 | File | Purpose |
 | --- | --- |
 | `Radio-Replay-<version>-Windows-x64-setup.exe` | Recommended installer |
-| `Radio-Replay-<version>-Windows-x64-portable.zip` | Extract the complete ZIP and run `Install-AudioRuntime.cmd` once before starting the app |
+| `Radio-Replay-<version>-Windows-x64-portable.zip` | Extract the complete ZIP and run the included executable |
 | `SHA256SUMS.txt` | SHA-256 checksums for both downloads |
 
-You do not need Rust, Node.js, or npm to use a release build. The installer downloads the checksum-pinned official libmpv audio runtime (about 54 MB) directly from upstream and can download WebView2 if missing. Portable users run the included runtime setup once. Initial setup needs an internet connection; local playback then works offline without an account or music service. Runtime provenance, licensing, and offline setup instructions are included in `runtime/README.txt`.
+You do not need Rust, Node.js, or npm to use a release build. Both Windows downloads include the libmpv audio DLL and its license: audio needs no extra download or setup step. Keep the portable ZIP's `audio/` and `runtime/` folders beside the executable. WebView2 is still required for the interface; the installer can download it if missing. Local playback works offline without an account or music service. Runtime licensing and source provenance are included in `runtime/README.txt` and `runtime/SOURCES.txt`.
 
 Release builds are currently unsigned; Windows may display a SmartScreen warning. Linux and macOS receive source/build checks in CI, but native playback and media controls still need testing before we offer packages for them.
 
@@ -184,11 +184,11 @@ An isolated native integration harness covers libmpv playback/static, SQLite, tr
 | `crates/audio/` | libmpv client boundary, worker, tuning static, preloading, and crossfades |
 | `src-tauri/` | Native shell, restricted IPC, file dialogs, tray, and system media controls |
 | `ui/` | Svelte interface and native playback/clock adapter |
-| `runtime/` | Pinned upstream audio runtime manifest and Windows setup scripts |
+| `runtime/` | Pinned audio runtime manifest, developer download helper, and license/source information |
 | `ui/theme/` | Theme styles and licensed fonts |
 | `assets/` | App icons and bundled tuning static |
 | `tests/` | Playback, browser UI/audio, and native integration fixtures |
 | `scripts/` | Version validation and Windows release packaging |
 | `.github/workflows/` | CI and GitHub Release automation |
 
-Radio Replay's own code is distributed under the [MIT license](LICENSE). libmpv is a separately downloaded component with its own licenses; see [runtime information](runtime/README.txt). No LiMusic code or assets are included.
+Radio Replay's own code is distributed under the [MIT license](LICENSE). The bundled libmpv runtime has its own licenses and source-distribution requirements; see [runtime information](runtime/README.txt). No LiMusic code or assets are included.

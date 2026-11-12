@@ -4,13 +4,13 @@ Audio playback uses native libmpv; WebView2 renders the interface.
 ### Windows x64 downloads
 
 - **`*-setup.exe`**: recommended installer.
-- **`*-Windows-x64-portable.zip`**: extract everything and run `Install-AudioRuntime.cmd` once, then start the included executable.
+- **`*-Windows-x64-portable.zip`**: extract everything and run the included executable; keep the `audio/` and `runtime/` folders beside it.
 - **`SHA256SUMS.txt`**: SHA-256 checksums for both files.
 
 These builds are unsigned. Windows may display a SmartScreen warning. The
-installer downloads the checksum-pinned libmpv runtime from its official upstream
-release and can download WebView2 if missing. Initial setup needs internet;
-local playback then works offline. No account or music service is required.
+audio DLL and licenses are included in both downloads; there is no audio setup
+command or subsequent runtime download. The installer can download WebView2 if
+missing. Local playback works offline without an account or music service.
 
 Existing Rust libraries continue to use `com.local.radioreplay.preview`; stations,
 settings and the metadata cache stay in the same location. To migrate from

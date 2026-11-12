@@ -5,5 +5,5 @@
   "library": "libmpv-2.dll",
   "librarySha256": "94fb87247732c59915cd59808bc582e843a71c22214b7b6c1e5563aa8149cef4",
   "release": "https://github.com/mpv-player/mpv/releases/tag/v0.42.0",
-  "license": "Official LGPL runtime, downloaded directly from upstream on the user's machine. Preserve LICENSE.LGPL alongside the DLL."
+  "license": "Unmodified official LGPL runtime, verified at build time and bundled with the app. See audio/LICENSE.LGPL and runtime/SOURCES.txt."
 }

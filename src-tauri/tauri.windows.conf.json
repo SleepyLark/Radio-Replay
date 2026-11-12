@@ -1,10 +1,12 @@
 {
   "bundle": {
     "resources": {
-      "../runtime/Install-AudioRuntime.ps1": "runtime/Install-AudioRuntime.ps1",
+      "../vendor/mpv/libmpv-2.dll": "audio/libmpv-2.dll",
+      "../vendor/mpv/LICENSE.LGPL": "audio/LICENSE.LGPL",
       "../runtime/mpv-windows-x64.json": "runtime/mpv-windows-x64.json",
       "../runtime/README.txt": "runtime/README.txt",
-      "../runtime/Install-AudioRuntime.cmd": "Install-AudioRuntime.cmd"
+      "../runtime/SOURCES.txt": "runtime/SOURCES.txt",
+      "../LICENSE": "runtime/LICENSE.Radio-Replay"
     },
     "windows": {
       "nsis": {

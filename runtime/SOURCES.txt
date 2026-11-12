@@ -1,0 +1,30 @@
+Source and build provenance for the bundled native audio runtime
+
+Radio Replay uses the unmodified official Windows x64 LGPL libmpv 0.42.0 DLL.
+Its original archive URL, archive SHA-256, and DLL SHA-256 are recorded in the
+adjacent mpv-windows-x64.json. The LGPL text is in ../audio/LICENSE.LGPL.
+Radio Replay's own MIT license is in LICENSE.Radio-Replay.
+
+mpv release source (v0.42.0):
+https://github.com/mpv-player/mpv/tree/v0.42.0
+https://github.com/mpv-player/mpv/archive/refs/tags/v0.42.0.tar.gz
+
+The official LGPL Windows binary uses this build recipe and workflow:
+https://github.com/mpv-player/mpv/blob/v0.42.0/ci/build-mingw64-full.sh
+https://github.com/mpv-player/mpv/blob/v0.42.0/ci/build-common.sh
+https://github.com/mpv-player/mpv/blob/v0.42.0/.github/workflows/build.yml
+
+The recipe builds FFmpeg and other dependencies using BtbN's LGPL build image:
+https://github.com/FFmpeg/FFmpeg
+https://github.com/BtbN/FFmpeg-Builds
+https://github.com/BtbN/FFmpeg-Builds/tree/master/scripts.d
+
+These references document upstream provenance; they are not a claim that a
+generic current source checkout reproduces this exact binary. When publishing
+binary distributions, provide corresponding library/dependency source and build
+materials as required by their licenses. Re-licensing Radio Replay alone does
+not satisfy those separate library source-distribution requirements.
+
+The application loads the DLL dynamically and permits compatible replacement
+libmpv client API 2 builds. It does not check the official checksum at playback
+time. RADIO_REPLAY_MPV_LIBRARY can select an alternate library by absolute path.

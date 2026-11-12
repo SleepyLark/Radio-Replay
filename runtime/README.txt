@@ -3,26 +3,26 @@ Radio Replay native audio runtime
 Radio Replay's own code is MIT licensed. The dynamically loaded libmpv and its
 dependencies have their own licenses.
 
-The installer and portable setup script download the unmodified official
-Windows x64 LGPL libmpv 0.42.0 archive directly from mpv-player's GitHub release.
-The application package does not redistribute that DLL. Both the archive and
-extracted DLL are checked against pinned SHA-256 hashes before installation.
-The upstream LICENSE.LGPL is extracted alongside audio/libmpv-2.dll.
+The installer and portable ZIP include the unmodified official Windows x64 LGPL
+libmpv 0.42.0 DLL at audio/libmpv-2.dll. No extra audio download or installation
+command is needed. The archive and DLL are verified against pinned SHA-256
+hashes during the developer build. The upstream LICENSE.LGPL is bundled beside
+the DLL. See SOURCES.txt for upstream source/build provenance and redistribution
+source requirements, and LICENSE.Radio-Replay for the application's MIT license.
 
 Runtime release and upstream source:
 https://github.com/mpv-player/mpv/releases/tag/v0.42.0
 https://github.com/mpv-player/mpv/tree/v0.42.0
 Upstream build recipe (including dependency build instructions):
-https://github.com/mpv-player/mpv/blob/v0.42.0/ci/build-mingw64.sh
+https://github.com/mpv-player/mpv/blob/v0.42.0/ci/build-mingw64-full.sh
 
-Portable installation: extract the entire ZIP, run Install-AudioRuntime.cmd
-once, then start Radio Replay. An internet connection is required for setup;
-local playback works offline afterward. Rerunning setup verifies the installed
-runtime and does not download it again when it matches.
+Portable installation: extract the entire ZIP and start Radio Replay. Keep the
+audio and runtime folders beside the executable. Audio playback works offline.
+WebView2 is still required for the interface; the Windows installer can download
+it if missing. It is not used as a fallback audio engine.
 
-Offline setup: obtain the exact archive named in runtime/mpv-windows-x64.json
-on a connected machine, transfer it, then run:
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime/Install-AudioRuntime.ps1 -ArchivePath C:\path\to\libmpv-v0.42.0-x86_64-w64-mingw32-lgpl.zip
+The download helper remaining in the source repository is a developer build
+tool only. It is not shipped or executed by release installers/portable apps.
 
 The DLL may be replaced with a compatible libmpv client API 2 build. The app
 does not enforce the setup checksum during playback. RADIO_REPLAY_MPV_LIBRARY
