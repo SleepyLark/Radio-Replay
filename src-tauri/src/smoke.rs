@@ -24,7 +24,13 @@ fn write_result(app: &tauri::AppHandle, smoke: &Smoke, ok: bool, message: &str) 
     } else {
         "web"
     };
-    let value = serde_json::json!({"passed":ok,"audioBackend":backend,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
+    #[cfg(feature = "native-audio")]
+    let audio_library = super::native_audio::library_path(app)
+        .ok()
+        .map(|p| p.display().to_string());
+    #[cfg(not(feature = "native-audio"))]
+    let audio_library: Option<String> = None;
+    let value = serde_json::json!({"passed":ok,"audioBackend":backend,"audioLibrary":audio_library,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
     let _ = std::fs::write(
         smoke.directory.join("report.json"),
         serde_json::to_vec_pretty(&value).unwrap(),

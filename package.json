@@ -7,17 +7,20 @@
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "predesktop": "node scripts/setup-mpv.mjs --ensure",
     "desktop": "tauri dev",
+    "prepackage": "node scripts/setup-mpv.mjs --ensure",
     "package": "tauri build",
     "test:core": "cargo test -p radio-replay-core",
     "test:playback": "node --experimental-strip-types --test tests/*.test.mjs",
-    "start": "tauri dev",
+    "start": "npm run desktop",
     "test:ui": "npm run build && node tests/ui-browser.cjs",
     "test:audio": "node tests/audio-browser.cjs",
     "check:version": "node scripts/version.mjs",
+    "clean": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean-builds.ps1",
     "version:set": "node scripts/version.mjs --set",
     "setup:mpv": "node scripts/setup-mpv.mjs",
-    "desktop:mpv": "tauri dev --features native-audio"
+    "desktop:mpv": "npm run desktop"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

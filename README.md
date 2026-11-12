@@ -2,9 +2,9 @@
 
 Radio Replay turns your own audio collection into a desktop radio experience. Create shuffled music stations, tune into complete radio recordings, organize stations into groups, and give each one its own artwork and style.
 
-The current application uses **Rust, Tauri 2, and Svelte 5**, with Web Audio playback inside the system WebView. It replaces the original Electron application, which remains available in Git history.
+The current application uses **Rust, Tauri 2, and Svelte 5**, with native audio playback through **libmpv**. WebView2 renders the interface; audio decoding and output run in Rust-owned native workers. The original Electron application remains available in Git history.
 
-The `codex/libmpv-playback` development branch includes an **experimental native libmpv audio backend**. WebView2 still renders the interface. See [the preview setup and migration status](docs/libmpv-migration.md) before running it; the normal launch and release workflow still use Web Audio.
+The libmpv migration is merged into `main` and selected by the normal launch and package commands. See [native audio setup and implementation details](docs/libmpv-migration.md).
 
 The station-tuning experience is inspired by games such as Grand Theft Auto. No game audio, music, or game artwork is included; you supply your own collection.
 
@@ -23,10 +23,10 @@ Download the Rust build from [GitHub Releases](https://github.com/SleepyLark/Rad
 | File | Purpose |
 | --- | --- |
 | `Radio-Replay-<version>-Windows-x64-setup.exe` | Recommended installer |
-| `Radio-Replay-<version>-Windows-x64.exe` | Standalone executable; requires Microsoft Edge WebView2 |
+| `Radio-Replay-<version>-Windows-x64-portable.zip` | Extract the complete ZIP and run `Install-AudioRuntime.cmd` once before starting the app |
 | `SHA256SUMS.txt` | SHA-256 checksums for both downloads |
 
-You do not need Rust, Node.js, or npm to use a release build. The installer can download WebView2 if it is missing, so first-time installation may need an internet connection. Local playback does not require an account or music service.
+You do not need Rust, Node.js, or npm to use a release build. The installer downloads the checksum-pinned official libmpv audio runtime (about 54 MB) directly from upstream and can download WebView2 if missing. Portable users run the included runtime setup once. Initial setup needs an internet connection; local playback then works offline without an account or music service. Runtime provenance, licensing, and offline setup instructions are included in `runtime/README.txt`.
 
 Release builds are currently unsigned; Windows may display a SmartScreen warning. Linux and macOS receive source/build checks in CI, but native playback and media controls still need testing before we offer packages for them.
 
@@ -45,7 +45,7 @@ Older releases, including the original `v0.5.0`, contain the Electron applicatio
 - Cache metadata and durations in SQLite for reuse across launches.
 - Inspect problematic files through dismissible notifications.
 
-Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. Actual playback depends on the codec and the platform WebView. An `.m4a` file, for example, is a container and may contain a codec the WebView cannot play even when another player supports it.
+Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. Network streams and M3U playlists are not enabled yet.
 
 ## Getting started
 
@@ -56,7 +56,7 @@ Choose **Create Station**, add files or a folder, and select a playback style:
 - **Music station** shuffles its tracks. Reorder controls are hidden because playback order is shuffled.
 - **Radio broadcast** follows the playlist order. Move individual recordings or entire folders with **Up**, **Down**, or **First**. Folder moves preserve the relative order of their recordings.
 
-Short recordings may use buffered playback for precisely scheduled transitions, within memory budgets. Larger recordings stream and preload the next recording. Streaming transitions depend on the codec and runtime; they are not guaranteed to be sample-accurate gapless playback.
+Recordings stream through libmpv, with one next recording preloaded near a transition. Crossfades use native equal-power mixing; zero-fade stations hand off to the preloaded decoder at EOF. Transitions are not guaranteed to be sample-accurate gapless playback.
 
 Add a logo, banner image or color, accent color, and playback options in the station editor. Supported artwork extensions are PNG, JPG, JPEG, WebP, and GIF.
 
@@ -151,7 +151,7 @@ Build a Windows installer:
 npm run package -- --bundles nsis -- --locked
 ```
 
-The installer is in `target/release/bundle/nsis/`; the standalone executable is `target/release/radio-replay-desktop.exe`. The first build downloads Rust dependencies and bundling tools. Builds run from the root, not the former `rewrite/` directory.
+The installer is in `target/release/bundle/nsis/`; the executable is `target/release/radio-replay-desktop.exe`. Normal launch/package commands automatically verify or install the developer runtime under ignored `vendor/mpv/`. Installed apps use `audio/libmpv-2.dll` in their installation folder. A bare executable is not a complete portable distribution: use the release packaging script below. The first build downloads Rust dependencies and bundling tools. Builds run from the repository root.
 
 For the same named files and checksums used by GitHub Actions, run `pwsh -File scripts/package-windows.ps1` with PowerShell 7.3 or newer. Those files are written to `release/<version>/windows-x64/`.
 
@@ -160,12 +160,13 @@ For the same named files and checksums used by GitHub Actions, run `pwsh -File s
 | Command | Purpose |
 | --- | --- |
 | `npm run desktop` | Run the native desktop app with development reload |
+| `npm run setup:mpv` | Verify/download the Windows x64 native audio runtime |
 | `npm run dev` | Browser-only layout preview |
 | `npm run check` | Check Svelte and TypeScript |
 | `npm run build` | Build the frontend |
 | `npm run test:playback` | Playback, timeline, playlist, and media-control regressions |
 | `npm run test:ui` | Build and test the UI in Microsoft Edge |
-| `npm run test:audio` | Real browser-audio integration checks |
+| `npm run test:audio` | Legacy Web Audio integration checks for regression comparisons |
 | `cargo test --workspace --locked` | Rust workspace tests |
 | `cargo fmt --all -- --check` | Check Rust formatting |
 | `npm run check:version` | Check all manifest and lockfile versions |
@@ -173,19 +174,21 @@ For the same named files and checksums used by GitHub Actions, run `pwsh -File s
 
 Browser integration tests use Playwright with installed Microsoft Edge. Set `RADIO_REPLAY_BROWSER` to another installed Playwright-supported browser channel if needed. Tests use fixtures rather than your real library.
 
-An isolated native integration harness also covers WebView2 playback, SQLite, tray behavior, and mini-player IPC. See [development validation](docs/development.md) for its commands.
+An isolated native integration harness covers libmpv playback/static, SQLite, tray behavior, mini-player IPC, and absence of browser audio fallback. See [development validation](docs/development.md) for its commands.
 
 ## Project layout
 
 | Path | Purpose |
 | --- | --- |
 | `crates/core/` | Rust library persistence, validation, metadata, and SQLite cache |
+| `crates/audio/` | libmpv client boundary, worker, tuning static, preloading, and crossfades |
 | `src-tauri/` | Native shell, restricted IPC, file dialogs, tray, and system media controls |
-| `ui/` | Svelte interface and Web Audio playback engine |
+| `ui/` | Svelte interface and native playback/clock adapter |
+| `runtime/` | Pinned upstream audio runtime manifest and Windows setup scripts |
 | `ui/theme/` | Theme styles and licensed fonts |
 | `assets/` | App icons and bundled tuning static |
 | `tests/` | Playback, browser UI/audio, and native integration fixtures |
 | `scripts/` | Version validation and Windows release packaging |
 | `.github/workflows/` | CI and GitHub Release automation |
 
-Radio Replay is distributed under the [MIT license](LICENSE). No LiMusic code or assets are included.
+Radio Replay's own code is distributed under the [MIT license](LICENSE). libmpv is a separately downloaded component with its own licenses; see [runtime information](runtime/README.txt). No LiMusic code or assets are included.

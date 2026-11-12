@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [features]
+default = ["native-audio"]
 native-smoke = []
 native-audio = ["dep:radio-replay-audio"]
 

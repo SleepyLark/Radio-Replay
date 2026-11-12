@@ -19,17 +19,7 @@ fn main_only(window: &WebviewWindow) -> Result<(), String> {
     }
 }
 pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
-    let path = if let Some(path) = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY") {
-        PathBuf::from(path)
-    } else {
-        #[cfg(windows)]
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vendor/mpv/libmpv-2.dll");
-        #[cfg(target_os = "macos")]
-        let path = PathBuf::from("libmpv.2.dylib");
-        #[cfg(not(any(windows, target_os = "macos")))]
-        let path = PathBuf::from("libmpv.so.2");
-        path
-    };
+    let path = library_path(app)?;
     let handle = app.clone();
     let bundled = bundled_tuning_source(app);
     app.manage(NativeAudio(
@@ -38,10 +28,38 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
         }),
         bundled,
     ));
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_title("Radio Replay — libmpv Preview");
-    }
     Ok(())
+}
+pub(crate) fn library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let path = if let Some(path) = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY") {
+        PathBuf::from(path)
+    } else {
+        #[cfg(windows)]
+        let path = {
+            let installed = app
+                .path()
+                .resource_dir()
+                .map_err(|e| e.to_string())?
+                .join("audio/libmpv-2.dll");
+            let development =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vendor/mpv/libmpv-2.dll");
+            if installed.is_file() {
+                installed
+            } else if development.is_file() {
+                development
+            } else {
+                installed
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let path = PathBuf::from("libmpv.2.dylib");
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let path = PathBuf::from("libmpv.so.2");
+        path
+    };
+    #[cfg(not(windows))]
+    let _ = app;
+    Ok(path)
 }
 #[tauri::command]
 pub async fn native_begin(

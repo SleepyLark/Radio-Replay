@@ -1,84 +1,69 @@
-# Native audio preview
+# Native audio
 
-This branch starts moving audio decoding and output from WebView2 into libmpv, while preserving the Svelte interface and Tauri shell. It is a development preview, not a release replacement. The application version remains 0.6.5; no new release tag is needed to test it.
+libmpv is the default audio engine on `main`. Rust owns decoding, output, tuning static, preloading, and crossfades; Svelte and WebView2 continue to render the interface. The project remains version 0.6.5.
 
-## Run on Windows x64
+## Development and releases
 
-Install the normal project prerequisites (Node.js 24+, Rust, and the Windows Tauri build tools described in the README). From this branch's checkout:
+From the repository root:
 
 ```powershell
 npm ci
-npm run setup:mpv
-npm run desktop:mpv
+npm run desktop
+npm run package
 ```
 
-The setup command downloads the official **mpv 0.42.0 Windows x64 LGPL** archive, verifies its pinned SHA-256 checksum, and extracts it into ignored `vendor/mpv/`. The runtime manifest is `runtime/mpv-windows-x64.json`. An unexpected checksum aborts extraction. The archive is cached in ignored `.mpv-cache/`.
+On Windows x64, the normal launch/package commands verify or download the official mpv 0.42.0 LGPL runtime into ignored `vendor/mpv/`. `npm run setup:mpv` performs the same setup explicitly. The archive and extracted DLL are checked against the SHA-256 hashes in `runtime/mpv-windows-x64.json`. Only the DLL and upstream license are extracted. An unchanged runtime is reused without downloading it again.
 
-On this development machine, the isolated checkout is:
+The Windows installer includes the setup scripts and downloads the runtime directly from its official upstream release after installing the app. The portable release is a ZIP containing the executable and the same setup scripts: extract the complete ZIP and run `Install-AudioRuntime.cmd` once. Neither app package embeds or redistributes the runtime DLL. Initial setup needs internet (about 54 MB for the audio archive); local playback then works offline. See `runtime/README.txt` for source/license provenance and offline setup using a transferred archive.
 
-```powershell
-cd C:\Users\Skylark\source\repos\Radio-Replay\.rewrite\mpv
-npm run desktop:mpv
-```
+Installed/portable apps first look for `audio/libmpv-2.dll` beside their resources; local builds can use `vendor/mpv/libmpv-2.dll`. `RADIO_REPLAY_MPV_LIBRARY` overrides the path, including for compatible replacement libraries. Checksums are enforced during official runtime setup, not while loading a user-provided replacement. macOS/Linux need a compatible system libmpv client API 2 runtime or this environment override; only Windows x64 is packaged and playback-tested.
 
-The window title includes **libmpv Preview**. The first build may take several minutes. Do not run the stable and preview players at the same time when testing media keys.
-
-The preview uses its own station settings and SQLite database under `%APPDATA%\com.local.radioreplay.mpv-preview`. Use **Manage Stations → Import library** to import `%APPDATA%\com.local.radioreplay.preview\stations.json`, or a library from another location. Importing references the existing audio files; it does not copy them. Preview edits do not modify the stable library.
-
-`npm run desktop` still launches the existing Web Audio player. `npm run package` and the release workflow still package that player. Native runtime bundling and installer integration are pending; copying the preview executable alone is insufficient.
+The app retains the existing `%APPDATA%\com.local.radioreplay.preview` station settings and SQLite cache. The experimental branch previously used `com.local.radioreplay.mpv-preview`; those files are preserved. If you edited that experimental library, use **Manage Stations → Import library** to import its `stations.json` explicitly. No app-data directories are removed during repository cleanup.
 
 ## Implemented
 
-- Local MP3, M4A, AAC, OGG, WAV, and FLAC playback through a Rust-owned libmpv worker.
-- Play/pause, mute with remembered volume, slider changes that unmute, native position/duration updates, and sequential track advancement with looping.
-- Existing shuffled music and ordered broadcast station timelines, station switching, mini-player controls, desktop media-action routing, and file-problem notifications.
-- Existing SQLite metadata/duration cache, with a paused native probe when cached or metadata-derived durations are unavailable.
-- Cancellation of stale tune preparations and generation-checked stops, so an older asynchronous operation cannot stop a newer tune.
-- Native looping tuning static (bundled or a saved custom file), minimum tuning delays, and cancellation when tuning finishes or changes. Muting and pausing also affect static.
-- Event-driven duration probes, so the worker continues handling controls and static playback while a probe loads.
-- Next-track preloading and native equal-power crossfades. Both decks pause together, honor mute/volume changes, and hand off without restarting the incoming recording. Fades are bounded by half the shortest prepared recording.
-- Failed preloads are reported and skipped while the outgoing recording continues playing. Players release the secondary context when stopped or retuned.
+- Local MP3, M4A, AAC, OGG, WAV, and FLAC playback, including ALAC in M4A.
+- Play/pause, remembered mute volume, volume changes that unmute, native position/duration updates, and track advancement with looping.
+- Shuffled music and ordered broadcast station timelines, station switching, mini-player controls, desktop media-action routing, and file-problem notifications.
+- SQLite metadata/duration caching and event-driven native probes when durations are unavailable. Probes keep the worker available for controls and static playback.
+- Generation-checked cancellation so an old tune or stop cannot affect a newer session.
+- Looping bundled/custom tuning static, minimum tuning delays, and cleanup on completion/cancellation. Pause and mute affect static too.
+- Next-track preloading and native equal-power crossfades. Both decks pause together; handoff preserves the incoming playback position. Fades are limited to half the shortest prepared recording.
+- Failed preloads are reported and skipped while the current recording continues. The secondary context is released on stop or retune.
 
-The previously reported `All Ur Luv.m4a` was tested directly: libmpv identified **ALAC**, loaded a duration of about 161.77 seconds, and advanced playback in a muted test. This verifies decoding and progression for that specific file; it is not an audible listening test of every supported format.
+## Practical limits
 
-## Remaining before switching the default
+Zero-fade stations hand off to a preloaded decoder at EOF, but separate output contexts and worker timing do not guarantee sample-accurate gapless playback. Subjective quality and device latency still need broader listening tests.
 
-- **Seamless transitions:** zero-fade stations use a preloaded decoder at EOF, but separate output contexts and worker timing do not guarantee sample-accurate gapless playback. Device latency and subjective crossfade quality still need listening tests.
-- **Shipping:** bundle the runtime, preserve upstream licenses/notices and applicable source obligations, and test installer upgrades before publishing a native release.
-- **Platforms and performance:** real native playback has been tested on Windows x64 only. RAM, CPU, and startup comparisons have not been measured. The pinned DLL alone is about **126 MB** uncompressed, so reduced distribution size is not an established benefit.
-- **Network radio/M3U:** deliberately unavailable in this local-file stage. Add a distinct streaming station mode, URL validation, playlist resolution, reconnect behavior, and live-stream UI before enabling it.
+The user reported approximately 236 MiB → 92 MiB private working set for the two measured app/WebView2 processes. This is an encouraging snapshot, not a controlled benchmark of every child process or long-session peak. The pinned DLL is about 126 MB uncompressed; file size is distinct from resident RAM.
 
-## Design
+Network streams and M3U playlists remain disabled. A future streaming mode needs URL/playlist handling, reconnect behavior, buffering, and a live-stream UI.
 
-`crates/audio` owns the dynamically loaded client API, its lifetime, and a bounded worker command queue. A libmpv handle stays on its creating thread. The client ABI follows the pinned upstream header, including platform-sized C types. `src-tauri/src/native_audio.rs` exposes prepared-station operations and controls to the main window; the mini player continues to send actions through the existing desktop bridge.
+## Design and validation
 
-The runtime uses at most two libmpv contexts. The primary context plays or probes a station file; the secondary plays tuning static, then is reused for one preloaded recording. It streams through mpv rather than decoding whole recordings into browser buffers. Demuxer cache limits are configured per context, but these are not total-process RAM limits. Crossfade envelopes follow the outgoing native playback position, so pausing stops their progress.
+`crates/audio` contains the dynamic client-API boundary, bounded command queue, and worker state machine. Handles stay on their creating thread. At most two contexts are used: the primary plays or probes station audio; the secondary plays static, then preloads a recording. Audio streams through mpv rather than whole-recording browser buffers. Per-context demuxer cache limits are not total-process RAM limits.
 
-`ui/playback/native.ts` adapts native snapshots to the current UI and retains the station clock calculations. It does not create `Audio`, `AudioContext`, or browser audio URLs. The original Web Audio engine remains available through the default build; the Cargo `native-audio` feature explicitly selects libmpv.
+`src-tauri/src/native_audio.rs` validates saved/prepared file identity and exposes main-window-only commands. Mini-player actions use the existing desktop bridge. Local mode disables mpv config/scripts, external references, and network protocols, and forces known audio demuxers to reject disguised playlists. These restrictions are not an OS sandbox for native codecs.
 
-The main window must prepare saved station files before loading them; native load checks those grants and file signatures. Local mode disables mpv configuration/scripts, external references, and network protocols, and forces known audio demuxers to reject disguised playlists. These restrictions are not an OS sandbox for native codecs. Library paths still need to exist and be readable by the current user, including mapped drives.
-
-## Validation
+`ui/playback/native.ts` adapts snapshots to the UI and retains virtual station clock calculations without creating browser Audio/AudioContext objects. The previous Web Audio engine is retained for regression comparisons only; compile the desktop with `--no-default-features` to select it.
 
 ```powershell
 npm run check
 npm run test:playback
 npm run test:ui
 cargo test --workspace --locked
-cargo check -p radio-replay-desktop --features native-audio --locked
+cargo check -p radio-replay-desktop --no-default-features --locked
 cargo run -p radio-replay-audio --example smoke -- vendor/mpv/libmpv-2.dll
 $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
 cargo test -p radio-replay-audio --locked -- --ignored
 ```
 
-The real-runtime smoke example generates silent WAV fixtures and checks duration, pause, seek, EOF, disguised-playlist rejection, worker advancement, stale-stop cancellation, and volume behavior. An optional second argument tests another local media file with output muted. Regular Rust tests do not require an installed libmpv runtime.
+The explicit native test uses silent fixtures to check looping static during probes, tuning delay, failed preload skipping, actual mpv volume properties, pausing both decks, crossfade handoff, zero-fade preloading, cancellation, and cleanup. Windows CI runs it with a timed null output; local validation also uses the Windows output device. The null-output override is compiled only into the audio unit-test binary.
 
-The explicit ignored test requires that runtime. It exercises a short static clip looping through a probe, minimum tuning delay, failed preload skipping, actual mpv gain properties, pause/resume of both decks, crossfade handoff, zero-fade preloading, and cancellation/cleanup. Its fixtures contain only silence, including when testing nonzero gains.
+The opt-in native desktop harness checks actual libmpv/static playback, SQLite reopening, mini-player IPC, file authorization, and absence of browser audio fallback. See [development validation](development.md). An earlier run intermittently timed out opening the editor after a simulated file drop; later runs passed, so that failure's cause remains unconfirmed.
 
-Windows CI sets `RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT=1` to use mpv's timed null output when no sound device is available. That override exists only in the audio crate's unit-test binary; normal application builds always use their normal audio output. Local validation also runs with the Windows output device.
+## Generated files
 
-The opt-in `native-smoke` desktop harness can also be built with `native-audio` to exercise the actual Windows app, SQLite reopening, mini-player controls, main-window-only IPC permissions, and rejection of unprepared file paths. Its native mode also tests bundled static and fails if tuning creates browser Audio/AudioContext objects. It is excluded from normal builds. Windows CI downloads the checksum-pinned runtime and runs the native audio regression; other platforms compile the native feature without executing it.
+`npm run clean -- -WhatIf` previews removal of root build output and local caches; `npm run clean` removes them. Source, `node_modules`, the active developer audio runtime, release deliverables, and application data are preserved. Subsequent Rust builds take longer after removing `target/`.
 
-One desktop validation run timed out waiting for the simulated file drop to open the station editor; the next two complete launches passed. The cause of that intermittent failure remains unconfirmed. It should be investigated if it reproduces during normal use.
-
-Upstream runtime and API: [mpv 0.42.0 release](https://github.com/mpv-player/mpv/releases/tag/v0.42.0), [pinned client header](https://github.com/mpv-player/mpv/blob/v0.42.0/include/mpv/client.h).
+Upstream: [mpv 0.42.0](https://github.com/mpv-player/mpv/releases/tag/v0.42.0), [client header](https://github.com/mpv-player/mpv/blob/v0.42.0/include/mpv/client.h).

@@ -59,6 +59,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo check -p radio-replay-desktop --locked
+      - run: cargo check -p radio-replay-desktop --no-default-features --locked
       - run: cargo check -p radio-replay-desktop --features native-smoke --locked
       - run: cargo check -p radio-replay-desktop --features native-audio,native-smoke --locked
       - name: Native libmpv audio regressions
@@ -66,6 +67,7 @@ jobs:
         shell: pwsh
         run: |
           npm run setup:mpv
+          node --test tests/runtime-setup.cjs
           $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
           $env:RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT = '1'
           cargo test -p radio-replay-audio --locked -- --ignored
@@ -138,10 +140,10 @@ jobs:
             flags=(--prerelease=false --latest)
           fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" ./*.exe SHA256SUMS.txt --clobber
+            gh release upload "$RELEASE_TAG" ./*.exe ./*.zip SHA256SUMS.txt --clobber
             gh release edit "$RELEASE_TAG" --draft=false "${flags[@]}"
           else
-            gh release create "$RELEASE_TAG" ./*.exe SHA256SUMS.txt \
+            gh release create "$RELEASE_TAG" ./*.exe ./*.zip SHA256SUMS.txt \
               --verify-tag --title "Radio Replay $RELEASE_VERSION" \
               --notes-file "$GITHUB_WORKSPACE/.github/release-notes.md" \
               --generate-notes "${flags[@]}"

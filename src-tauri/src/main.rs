@@ -416,8 +416,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
-            #[cfg(feature = "native-audio")]
-            let directory = directory.with_file_name("com.local.radioreplay.mpv-preview");
             #[cfg(feature = "native-smoke")]
             let directory = smoke::initialize(app.handle())?.unwrap_or(directory);
             app.manage(DataDirectory(directory.clone()));

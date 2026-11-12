@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "resources": {
+      "../runtime/Install-AudioRuntime.ps1": "runtime/Install-AudioRuntime.ps1",
+      "../runtime/mpv-windows-x64.json": "runtime/mpv-windows-x64.json",
+      "../runtime/README.txt": "runtime/README.txt",
+      "../runtime/Install-AudioRuntime.cmd": "Install-AudioRuntime.cmd"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows-hooks.nsh"
+      }
+    }
+  }
+}

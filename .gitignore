@@ -35,3 +35,4 @@ Thumbs.db
 .rewrite/
 vendor/mpv/
 .mpv-cache/
+/audio/

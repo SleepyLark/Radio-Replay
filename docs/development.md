@@ -11,6 +11,9 @@ npm run test:audio
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo check -p radio-replay-desktop --features native-smoke --locked
+npm run setup:mpv
+$env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
+cargo test -p radio-replay-audio --locked -- --ignored
 ```
 
 Browser integration uses installed Microsoft Edge. If it is missing, run
@@ -42,10 +45,19 @@ try {
 }
 ```
 
-The harness covers WebView2 audio, file grants, SQLite caching, main/mini IPC,
+The harness covers native libmpv audio/static without browser audio fallback, file grants, SQLite caching, main/mini IPC,
 tray behavior, and exit-on-close. It needs a working native desktop environment;
 CI compile-checks this feature but does not claim a hosted native run. Repeat the
 run with the same fixtures to check durations cached across process restarts.
+
+The default desktop build uses libmpv. The WebView2 UI is retained; `npm run test:audio`
+exercises the old Web Audio implementation only for regression comparisons. A
+desktop comparison build can select that engine with `--no-default-features`.
+
+`npm run clean -- -WhatIf` previews root cache/build cleanup. `npm run clean`
+removes `target`, frontend/test output, and local build/download caches while
+preserving source, dependencies, the developer audio DLL, release deliverables,
+and application data. The next Rust build will take longer.
 
 For the first large-library optimization measurements and remaining audit work,
 see [performance pass 1](performance-pass-1.md).

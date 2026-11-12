@@ -1,0 +1,35 @@
+// Explicit Windows packaging check; requires `npm run setup:mpv` first.
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {execFileSync,spawnSync}=require('node:child_process');
+const {mkdirSync,mkdtempSync,readFileSync,writeFileSync,readdirSync,existsSync}=require('node:fs');
+const {createHash}=require('node:crypto');
+const path=require('node:path');
+const root=path.resolve(__dirname,'..');
+const manifest=JSON.parse(readFileSync(path.join(root,'runtime/mpv-windows-x64.json'),'utf8'));
+const archive=path.join(root,'.mpv-cache',`libmpv-${manifest.version}-lgpl.zip`);
+const setup=path.join(root,'runtime/Install-AudioRuntime.ps1');
+test('runtime setup verifies, minimally extracts, reuses and repairs the official DLL; corrupt downloads install nothing', {skip:process.platform!=='win32'},()=>{
+  assert.ok(existsSync(archive),'Run npm run setup:mpv before the runtime packaging test');
+  mkdirSync(path.join(root,'out'),{recursive:true});
+  const directory=mkdtempSync(path.join(root,'out/runtime-setup-'));
+  const destination=path.join(directory,'valid audio');
+  const args=(output,zip)=>['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',setup,'-Destination',output,'-ArchivePath',zip];
+  const run=(output,zip)=>execFileSync('powershell.exe',args(output,zip),{encoding:'utf8',windowsHide:true});
+  const hash=file=>createHash('sha256').update(readFileSync(file)).digest('hex');
+  assert.match(run(destination,archive),/Verified libmpv/);
+  assert.deepEqual(readdirSync(destination).sort(),['LICENSE.LGPL',manifest.library].sort());
+  const library=path.join(destination,manifest.library);
+  assert.equal(hash(library),manifest.librarySha256);
+  const corrupt=path.join(directory,'corrupt.zip');
+  writeFileSync(corrupt,'not a trusted runtime');
+  assert.match(run(destination,corrupt),/Verified libmpv/,'An intact runtime should not download or re-extract');
+  writeFileSync(library,'damaged DLL');
+  assert.match(run(destination,archive),/Verified libmpv/);
+  assert.equal(hash(library),manifest.librarySha256);
+  const rejected=path.join(directory,'rejected audio');
+  const failure=spawnSync('powershell.exe',args(rejected,corrupt),{encoding:'utf8',windowsHide:true});
+  assert.notEqual(failure.status,0);
+  assert.match(failure.stderr,/checksum mismatch/i);
+  assert.equal(existsSync(rejected),false);
+});

@@ -3,6 +3,7 @@
   "url": "https://github.com/mpv-player/mpv/releases/download/v0.42.0/libmpv-v0.42.0-x86_64-w64-mingw32-lgpl.zip",
   "sha256": "8e5f77430efc53ef175804ba6618527e3af0448a0dcabf04d3cc72659d1a6fce",
   "library": "libmpv-2.dll",
+  "librarySha256": "94fb87247732c59915cd59808bc582e843a71c22214b7b6c1e5563aa8149cef4",
   "release": "https://github.com/mpv-player/mpv/releases/tag/v0.42.0",
-  "license": "LGPL build; preserve upstream notices and audit redistribution before packaging"
+  "license": "Official LGPL runtime, downloaded directly from upstream on the user's machine. Preserve LICENSE.LGPL alongside the DLL."
 }
