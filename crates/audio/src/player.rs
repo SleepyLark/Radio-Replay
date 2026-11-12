@@ -1,5 +1,5 @@
-//! One libmpv context, owned by one worker. No decoder work runs in the WebView.
-use crate::{Event, Mpv};
+//! Bounded controls for a native worker. Decoder handles never leave its thread.
+use crate::runtime::Runtime;
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
@@ -8,7 +8,7 @@ use std::{
         mpsc::{self, Sender, SyncSender},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -27,12 +27,24 @@ pub struct Snapshot {
     pub error: String,
     pub error_path: String,
     pub issue_revision: u64,
+    pub tuning: bool,
+    pub tuning_playing: bool,
+    pub next_path: String,
+    pub transitioning: bool,
+    pub transition_progress: f64,
 }
 #[derive(Clone)]
 pub struct Plan {
     pub paths: Vec<PathBuf>,
     pub index: usize,
     pub seconds: f64,
+    pub fade: f64,
+}
+#[derive(Clone, Default)]
+pub struct Tuning {
+    pub sound: Option<PathBuf>,
+    pub minimum: Duration,
+    pub problem: Option<(String, String)>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
@@ -45,7 +57,7 @@ pub enum Control {
 }
 type Reply = Sender<Result<Snapshot, String>>;
 enum Message {
-    Begin(u64, Reply),
+    Begin(u64, Tuning, Reply),
     Load(u64, Plan, Reply),
     Control(Control, Option<u64>, Reply),
     Probe(u64, PathBuf, Sender<Result<f64, String>>),
@@ -68,20 +80,18 @@ impl Player {
         let shared = snapshot.clone();
         let current = generation.clone();
         std::thread::spawn(move || {
-            let mut runtime = Mpv::open(&library).map(|mpv| Runtime {
-                mpv,
-                state: Snapshot {
-                    volume: 0.8,
-                    ..Default::default()
-                },
-                plan: None,
-                want_play: false,
-                offset: 0.0,
-                failed: 0,
-            });
+            let mut runtime = Runtime::open(library);
             let mut previous = Snapshot::default();
             loop {
-                let message = match receiver.recv_timeout(Duration::from_millis(100)) {
+                let interval = if runtime
+                    .as_ref()
+                    .is_ok_and(|r| r.state.loading || r.state.playing)
+                {
+                    20
+                } else {
+                    100
+                };
+                let message = match receiver.recv_timeout(Duration::from_millis(interval)) {
                     Ok(message) => Some(message),
                     Err(mpsc::RecvTimeoutError::Timeout) => None,
                     Err(_) => break,
@@ -95,7 +105,7 @@ impl Player {
                     Err(error) => {
                         if let Some(message) = message {
                             match message {
-                                Message::Begin(_, reply)
+                                Message::Begin(_, _, reply)
                                 | Message::Load(_, _, reply)
                                 | Message::Control(_, _, reply) => {
                                     let _ = reply.send(Err(error.clone()));
@@ -110,40 +120,18 @@ impl Player {
                     Ok(runtime) => {
                         if let Some(message) = message {
                             match message {
-                                Message::Begin(id, reply) => {
+                                Message::Begin(id, tuning, reply) => {
                                     if id != current.load(Ordering::SeqCst) {
                                         let _ = reply.send(Err("Tuning changed".into()));
                                         continue;
                                     }
-                                    let _ = runtime.mpv.command(&["stop"]);
-                                    runtime.drain();
-                                    runtime.plan = None;
-                                    runtime.want_play = true;
-                                    runtime.failed = 0;
-                                    runtime.state = Snapshot {
-                                        generation: id,
-                                        sequence: runtime.state.sequence,
-                                        volume: runtime.state.volume,
-                                        muted: runtime.state.muted,
-                                        loading: true,
-                                        ..Default::default()
-                                    };
-                                    pending = Some((reply, Ok(())));
+                                    pending = Some((reply, runtime.begin(id, tuning)));
                                 }
                                 Message::Load(id, plan, reply) => {
                                     let result = if id != current.load(Ordering::SeqCst) {
                                         Err("Tuning changed".into())
-                                    } else if plan.paths.is_empty()
-                                        || plan.index >= plan.paths.len()
-                                        || !plan.seconds.is_finite()
-                                        || !(0.0..=172800.0).contains(&plan.seconds)
-                                    {
-                                        Err("Invalid native playback plan".into())
                                     } else {
-                                        runtime.state.index = plan.index;
-                                        runtime.offset = plan.seconds;
-                                        runtime.plan = Some(plan);
-                                        runtime.load()
+                                        runtime.load_plan(plan)
                                     };
                                     pending = Some((reply, result));
                                 }
@@ -155,19 +143,23 @@ impl Player {
                                         continue;
                                     }
                                     let result = runtime.control(control);
-                                    if runtime.plan.is_none() && !runtime.state.loading {
+                                    if runtime.idle() {
                                         runtime.state.generation = current.load(Ordering::SeqCst);
                                     }
                                     pending = Some((reply, result));
                                 }
                                 Message::Probe(id, path, reply) => {
-                                    let result = runtime.probe(id, &current, path);
-                                    let _ = reply.send(result);
+                                    runtime.start_probe(
+                                        id,
+                                        current.load(Ordering::SeqCst),
+                                        path,
+                                        reply,
+                                    );
                                 }
                                 Message::Shutdown(_) => unreachable!(),
                             }
                         }
-                        runtime.poll();
+                        runtime.poll(current.load(Ordering::SeqCst));
                         if runtime.state != previous {
                             runtime.state.sequence += 1;
                             previous = runtime.state.clone();
@@ -204,9 +196,15 @@ impl Player {
             .map_err(|e| e.to_string())
     }
     pub fn begin(&self) -> Result<Snapshot, String> {
+        self.begin_tuning(Tuning::default())
+    }
+    pub fn begin_tuning(&self, tuning: Tuning) -> Result<Snapshot, String> {
+        if tuning.minimum > Duration::from_millis(1500) {
+            return Err("Invalid minimum tuning delay".into());
+        }
         let id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let (reply, rx) = mpsc::channel();
-        self.send(Message::Begin(id, reply))?;
+        self.send(Message::Begin(id, tuning, reply))?;
         rx.recv_timeout(Duration::from_secs(12))
             .map_err(|e| e.to_string())?
     }
@@ -256,196 +254,5 @@ impl Player {
         if self.send(Message::Shutdown(reply)).is_ok() {
             let _ = rx.recv_timeout(Duration::from_secs(2));
         }
-    }
-}
-struct Runtime {
-    mpv: Mpv,
-    state: Snapshot,
-    plan: Option<Plan>,
-    want_play: bool,
-    offset: f64,
-    failed: usize,
-}
-impl Runtime {
-    fn drain(&mut self) {
-        for _ in 0..128 {
-            if self.mpv.event(0.0) == Event::None {
-                break;
-            }
-        }
-    }
-    fn volume(&mut self) -> Result<(), String> {
-        self.mpv.set(
-            "volume",
-            &(if self.state.muted {
-                0.0
-            } else {
-                self.state.volume * 100.0
-            })
-            .to_string(),
-        )
-    }
-    fn load(&mut self) -> Result<(), String> {
-        let path =
-            self.plan.as_ref().ok_or("No native playback plan")?.paths[self.state.index].clone();
-        self.mpv.set("pause", "yes")?;
-        self.volume()?;
-        self.state.path = path.to_string_lossy().into_owned();
-        self.state.seconds = 0.0;
-        self.state.duration = 0.0;
-        self.state.loading = true;
-        self.state.playing = false;
-        self.mpv.load_local(&path)
-    }
-    fn control(&mut self, control: Control) -> Result<(), String> {
-        match control {
-            Control::Play => {
-                self.want_play = true;
-                if self.plan.is_some() && !self.state.loading {
-                    self.mpv.set("pause", "no")?;
-                }
-            }
-            Control::Pause => {
-                self.want_play = false;
-                self.mpv.set("pause", "yes")?;
-                self.state.playing = false;
-            }
-            Control::Mute => {
-                self.state.muted = !self.state.muted;
-                self.volume()?;
-            }
-            Control::Volume(value) => {
-                self.state.volume = value;
-                self.state.muted = false;
-                self.volume()?;
-            }
-            Control::Stop => {
-                self.mpv.command(&["stop"])?;
-                self.drain();
-                self.plan = None;
-                self.want_play = false;
-                self.state.loading = false;
-                self.state.playing = false;
-                self.state.path.clear();
-                self.state.seconds = 0.0;
-                self.state.duration = 0.0;
-            }
-        }
-        Ok(())
-    }
-    fn fail(&mut self, mut error: String) {
-        loop {
-            self.state.error_path = self.state.path.clone();
-            self.state.error = error;
-            self.state.issue_revision += 1;
-            self.failed += 1;
-            let count = self.plan.as_ref().map(|p| p.paths.len()).unwrap_or(0);
-            if count == 0 || self.failed >= count {
-                self.want_play = false;
-                self.state.loading = false;
-                self.state.playing = false;
-                return;
-            }
-            self.state.index = (self.state.index + 1) % count;
-            self.offset = 0.0;
-            match self.load() {
-                Ok(()) => return,
-                Err(next) => error = next,
-            }
-        }
-    }
-    fn poll(&mut self) {
-        for _ in 0..64 {
-            match self.mpv.event(0.0) {
-                Event::None => break,
-                Event::Loaded if self.plan.is_some() => {
-                    let result = (|| {
-                        if self.offset > 0.0 {
-                            self.mpv.command(&[
-                                "seek",
-                                &self.offset.to_string(),
-                                "absolute+exact",
-                            ])?;
-                        }
-                        self.mpv
-                            .set("pause", if self.want_play { "no" } else { "yes" })
-                    })();
-                    if let Err(error) = result {
-                        self.fail(error);
-                        continue;
-                    }
-                    self.offset = 0.0;
-                    self.state.loading = false;
-                    self.failed = 0;
-                }
-                Event::Ended if self.plan.is_some() => {
-                    let count = self.plan.as_ref().unwrap().paths.len();
-                    self.state.index = (self.state.index + 1) % count;
-                    self.offset = 0.0;
-                    if let Err(error) = self.load() {
-                        self.fail(error);
-                    }
-                }
-                Event::Failed(error) if self.plan.is_some() => self.fail(error),
-                Event::Shutdown => {
-                    self.want_play = false;
-                    self.state.playing = false;
-                    self.state.error = "libmpv stopped".into();
-                    self.state.issue_revision += 1;
-                }
-                _ => {}
-            }
-        }
-        if self.plan.is_some() && !self.state.loading {
-            self.state.seconds = self
-                .mpv
-                .number("time-pos")
-                .unwrap_or(self.state.seconds)
-                .max(0.0);
-            self.state.duration = self
-                .mpv
-                .number("duration")
-                .unwrap_or(self.state.duration)
-                .max(0.0);
-            self.state.playing = self.want_play
-                && !self.mpv.flag("pause").unwrap_or(true)
-                && !self.mpv.flag("idle-active").unwrap_or(true);
-        }
-    }
-    fn probe(&mut self, id: u64, current: &AtomicU64, path: PathBuf) -> Result<f64, String> {
-        if id != current.load(Ordering::SeqCst) {
-            return Err("Tuning changed".into());
-        }
-        if self.plan.is_some() {
-            return Err("Begin a new tune before probing audio durations".into());
-        }
-        self.mpv.set("pause", "yes")?;
-        self.mpv.set("volume", "0")?;
-        self.drain();
-        self.mpv.load_local(&path)?;
-        let until = Instant::now() + Duration::from_secs(8);
-        let result = loop {
-            if id != current.load(Ordering::SeqCst) {
-                break Err("Tuning changed".into());
-            }
-            if Instant::now() > until {
-                break Err("Native duration probe timed out".into());
-            }
-            match self.mpv.event(0.02) {
-                Event::Loaded => {
-                    break self
-                        .mpv
-                        .number("duration")
-                        .filter(|n| *n > 0.0 && *n <= 172800.0)
-                        .ok_or("No finite audio duration".into())
-                }
-                Event::Failed(error) => break Err(error),
-                _ => {}
-            }
-        };
-        let _ = self.mpv.command(&["stop"]);
-        self.drain();
-        let _ = self.volume();
-        result
     }
 }

@@ -118,9 +118,12 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
             extra,
         });
     }
-    config
-        .settings
-        .insert("tuningTransition".into(), false.into());
+    config.settings.insert(
+        "tuningTransition".into(),
+        cfg!(feature = "native-audio").into(),
+    );
+    config.settings.insert("tuningMinMs".into(), 400.into());
+    config.settings.insert("tuningMaxMs".into(), 400.into());
     config.settings.insert("crossfade".into(), 0.into());
     ConfigStore::new(directory.join("stations.json")).save(&config)?;
     app.manage(Smoke {

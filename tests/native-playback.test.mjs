@@ -75,14 +75,26 @@ test('old-generation native events cannot replace current playback or revive a s
   }finally{player.dispose();}
 });
 
-test('native file notices remain stable across progress events and unsupported fades are explicit',async()=>{
+test('native file notices remain stable across progress events',async()=>{
   const {player,emit}=setup(async()=>({tracks:[track('good')],problems:[{path:'missing',name:'Missing',reason:'File not found',kind:'file'}]}));
   try {
     await player.tune({...station('radio'),crossfade:5000});
     const notice=player.state.notice;
-    assert.match(notice.message,/crossfades are pending/);
     assert.equal(notice.problems[0].path,'missing');
     emit({seconds:1});emit({seconds:2});
     assert.equal(player.state.notice,notice);
+  }finally{player.dispose();}
+});
+
+test('native tuning sends the minimum delay and clamps fades to half the shortest recording',async()=>{
+  const {player,calls}=setup(async()=>({tracks:[track('long'),{...track('short'),duration:4}],problems:[]}));
+  try {
+    await player.tune({...station('radio'),crossfade:5000},{tuningMinMs:750,tuningMaxMs:750});
+    assert.equal(calls.find(call=>call.command==='native_begin').args.delayMs,750);
+    assert.equal(calls.find(call=>call.command==='native_load').args.fade,2);
+    assert.equal(player.state.notice,null);
+    await player.tune({...station('radio'),crossfade:0},{tuningTransition:false});
+    assert.equal(calls.filter(call=>call.command==='native_begin').at(-1).args.delayMs,0);
+    assert.equal(calls.filter(call=>call.command==='native_load').at(-1).args.fade,0);
   }finally{player.dispose();}
 });

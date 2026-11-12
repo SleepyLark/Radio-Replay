@@ -1,4 +1,4 @@
-use radio_replay_audio::player::{Control, Plan, Player, Snapshot};
+use radio_replay_audio::player::{Control, Plan, Player, Snapshot, Tuning};
 use radio_replay_core::{
     library::{self, PreparedStation, TrackProblem},
     metadata,
@@ -6,10 +6,11 @@ use radio_replay_core::{
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use tauri::{Emitter, Manager, WebviewWindow};
 
-pub struct NativeAudio(Player);
+pub struct NativeAudio(Player, Result<PathBuf, String>);
 fn main_only(window: &WebviewWindow) -> Result<(), String> {
     if window.label() == "main" {
         Ok(())
@@ -30,9 +31,13 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
         path
     };
     let handle = app.clone();
-    app.manage(NativeAudio(Player::start(path, move |state| {
-        let _ = handle.emit_to("main", "native-audio-state", state);
-    })));
+    let bundled = bundled_tuning_source(app);
+    app.manage(NativeAudio(
+        Player::start(path, move |state| {
+            let _ = handle.emit_to("main", "native-audio-state", state);
+        }),
+        bundled,
+    ));
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("Radio Replay — libmpv Preview");
     }
@@ -42,11 +47,79 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
 pub async fn native_begin(
     window: WebviewWindow,
     app: tauri::AppHandle,
+    delay_ms: Option<u64>,
 ) -> Result<Snapshot, String> {
     main_only(&window)?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<NativeAudio>().0.begin())
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let delay = delay_ms.unwrap_or(0);
+        if delay > 1500 {
+            return Err("Invalid tuning delay".into());
+        }
+        let config = app
+            .state::<super::Library>()
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .load()?;
+        let mut tuning = Tuning {
+            minimum: Duration::from_millis(delay),
+            ..Default::default()
+        };
+        if config
+            .settings
+            .get("tuningTransition")
+            .and_then(|v| v.as_bool())
+            != Some(false)
+        {
+            let source = config
+                .settings
+                .get("staticPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or("bundled");
+            if !source.is_empty() && source != "off" {
+                match tuning_source(&app, source) {
+                    Ok(path) => tuning.sound = Some(path),
+                    Err(error) => {
+                        tuning.problem = Some((
+                            source.to_owned(),
+                            format!("Tuning sound unavailable: {error}"),
+                        ))
+                    }
+                }
+            }
+        } else {
+            tuning.minimum = Duration::ZERO;
+        }
+        app.state::<NativeAudio>().0.begin_tuning(tuning)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn tuning_source(app: &tauri::AppHandle, source: &str) -> Result<PathBuf, String> {
+    if source == "bundled" {
+        return app.state::<NativeAudio>().1.clone();
+    }
+    let path = Path::new(source);
+    if !library::audio_file(path) {
+        return Err("Invalid tuning audio extension".into());
+    }
+    let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
+        return Err("Tuning audio exceeds 64 MiB".into());
+    }
+    Ok(path)
+}
+fn bundled_tuning_source(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let path = app
+        .state::<super::DataDirectory>()
+        .0
+        .join("bundled-static.mp3");
+    let bytes = include_bytes!("../../assets/audio/static.mp3");
+    if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(path)
 }
 #[tauri::command]
 pub fn native_snapshot(window: WebviewWindow, app: tauri::AppHandle) -> Result<Snapshot, String> {
@@ -183,6 +256,7 @@ pub async fn native_load(
     paths: Vec<String>,
     index: usize,
     seconds: f64,
+    fade: Option<f64>,
 ) -> Result<Snapshot, String> {
     main_only(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -195,6 +269,8 @@ pub async fn native_load(
             || index >= paths.len()
             || !seconds.is_finite()
             || !(0.0..=172800.0).contains(&seconds)
+            || !fade.unwrap_or(0.0).is_finite()
+            || !(0.0..=30.0).contains(&fade.unwrap_or(0.0))
         {
             return Err("Invalid native playback plan".into());
         }
@@ -218,6 +294,7 @@ pub async fn native_load(
                 paths: approved,
                 index,
                 seconds,
+                fade: fade.unwrap_or(0.0),
             },
         )
     })

@@ -1,6 +1,7 @@
 //! Small libmpv client boundary. Handles stay on their creating worker thread.
 //! Only local audio is accepted in this stage; network stations are a later mode.
 pub mod player;
+mod runtime;
 use libloading::Library;
 use std::{
     ffi::{c_char, c_int, c_ulong, c_void, CStr, CString},
@@ -128,6 +129,7 @@ impl Mpv {
                 ("terminal", "no"),
                 ("vid", "no"),
                 ("audio-display", "no"),
+                ("audio-client-name", "Radio Replay"),
                 ("osc", "no"),
                 ("input-default-bindings", "no"),
                 ("input-vo-keyboard", "no"),
@@ -146,6 +148,16 @@ impl Mpv {
                     mpv.handle,
                     string(name)?.as_ptr(),
                     string(value)?.as_ptr(),
+                ))?;
+            }
+            // CI exercises timed native decoding without requiring a sound device.
+            // This override is compiled only into this crate's unit-test binary.
+            #[cfg(test)]
+            if std::env::var("RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT").as_deref() == Ok("1") {
+                mpv.check(option(
+                    mpv.handle,
+                    string("ao")?.as_ptr(),
+                    string("null")?.as_ptr(),
                 ))?;
             }
             mpv.check(initialize(mpv.handle))?;

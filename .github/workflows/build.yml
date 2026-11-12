@@ -61,6 +61,14 @@ jobs:
       - run: cargo check -p radio-replay-desktop --locked
       - run: cargo check -p radio-replay-desktop --features native-smoke --locked
       - run: cargo check -p radio-replay-desktop --features native-audio,native-smoke --locked
+      - name: Native libmpv audio regressions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run setup:mpv
+          $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
+          $env:RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT = '1'
+          cargo test -p radio-replay-audio --locked -- --ignored
       - name: Install browser for integration tests
         if: runner.os == 'Windows'
         run: npx playwright install msedge

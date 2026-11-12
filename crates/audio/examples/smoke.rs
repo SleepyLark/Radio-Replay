@@ -116,6 +116,7 @@ fn main() -> Result<(), String> {
             paths: vec![file.clone(), second],
             index: 0,
             seconds: 2.5,
+            fade: 0.0,
         },
     )?;
     let until = Instant::now() + Duration::from_secs(6);
@@ -153,6 +154,7 @@ fn main() -> Result<(), String> {
             paths: vec![file],
             index: 0,
             seconds: 0.0,
+            fade: 0.0,
         },
     )?;
     std::thread::sleep(Duration::from_millis(250));
