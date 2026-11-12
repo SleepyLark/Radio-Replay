@@ -1,6 +1,12 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "load_config",
+        "playback_backend",
+        "native_begin",
+        "native_snapshot",
+        "native_control",
+        "native_prepare",
+        "native_load",
         "import_config",
         "choose_audio",
         "choose_artwork",

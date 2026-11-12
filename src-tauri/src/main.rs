@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod desktop;
 mod drops;
+#[cfg(feature = "native-audio")]
+mod native_audio;
 #[cfg(feature = "native-smoke")]
 mod smoke;
 struct DataDirectory(std::path::PathBuf);
@@ -18,6 +20,18 @@ use std::{
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 struct MetadataCache(Mutex<metadata::Cache>);
+
+#[tauri::command]
+fn playback_backend(window: tauri::WebviewWindow) -> Result<&'static str, String> {
+    if window.label() != "main" {
+        return Err("Main player required".into());
+    }
+    Ok(if cfg!(feature = "native-audio") {
+        "mpv"
+    } else {
+        "web"
+    })
+}
 
 fn saved_audio(library: &Library, key: &str, path: &str) -> Result<library::PlayableTrack, String> {
     library
@@ -402,6 +416,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
+            #[cfg(feature = "native-audio")]
+            let directory = directory.with_file_name("com.local.radioreplay.mpv-preview");
             #[cfg(feature = "native-smoke")]
             let directory = smoke::initialize(app.handle())?.unwrap_or(directory);
             app.manage(DataDirectory(directory.clone()));
@@ -419,35 +435,59 @@ fn main() {
                 Mutex::default(),
             ));
             desktop::setup(app.handle())?;
+            #[cfg(feature = "native-audio")]
+            native_audio::setup(app.handle())?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            load_config,
-            import_config,
-            choose_audio,
-            choose_artwork,
-            prepare_station,
-            track_details,
-            remember_duration,
-            clear_metadata_cache,
-            save_group,
-            delete_group,
-            save_settings,
-            resolve_tuning_sound,
-            recover_legacy_library,
-            save_station,
-            delete_station,
-            delete_stations,
-            open_config,
-            desktop::desktop_publish,
-            desktop::desktop_snapshot,
-            desktop::desktop_action,
-            desktop::desktop_open_mini,
-            desktop::desktop_restore,
-            desktop::desktop_quit,
-            #[cfg(feature = "native-smoke")]
-            smoke::native_smoke_report
-        ])
+        .invoke_handler(|invoke| {
+            #[cfg(feature = "native-audio")]
+            if matches!(
+                invoke.message.command(),
+                "native_begin"
+                    | "native_snapshot"
+                    | "native_control"
+                    | "native_prepare"
+                    | "native_load"
+            ) {
+                let native_handler: fn(tauri::ipc::Invoke<tauri::Wry>)->bool = tauri::generate_handler![
+                    native_audio::native_begin,
+                    native_audio::native_snapshot,
+                    native_audio::native_control,
+                    native_audio::native_prepare,
+                    native_audio::native_load
+                ];
+                return native_handler(invoke);
+            }
+            let standard_handler: fn(tauri::ipc::Invoke<tauri::Wry>)->bool = tauri::generate_handler![
+                playback_backend,
+                load_config,
+                import_config,
+                choose_audio,
+                choose_artwork,
+                prepare_station,
+                track_details,
+                remember_duration,
+                clear_metadata_cache,
+                save_group,
+                delete_group,
+                save_settings,
+                resolve_tuning_sound,
+                recover_legacy_library,
+                save_station,
+                delete_station,
+                delete_stations,
+                open_config,
+                desktop::desktop_publish,
+                desktop::desktop_snapshot,
+                desktop::desktop_action,
+                desktop::desktop_open_mini,
+                desktop::desktop_restore,
+                desktop::desktop_quit,
+                #[cfg(feature = "native-smoke")]
+                smoke::native_smoke_report
+            ];
+            standard_handler(invoke)
+        })
         .on_page_load(|webview, payload| {
             #[cfg(feature = "native-smoke")]
             smoke::page_loaded(webview, payload);

@@ -42,6 +42,9 @@ void (async () => {
         denied = true;
       }
       assert(denied, 'Mini window could mutate library settings');
+      let nativeDenied=false;
+      try{await invoke('native_control',{control:{type:'play'}});}catch{nativeDenied=true;}
+      assert(nativeDenied,'Mini bypassed the main-player native audio command boundary');
       document.querySelector('[aria-label="Pause"]').click();
       await until(
         () => !!document.querySelector('[aria-label="Play"]'),
@@ -120,8 +123,17 @@ void (async () => {
       document.querySelector('.station').click();
       await until(
         () => !!document.querySelector('[aria-label="Pause"]'),
-        'WebView2 audio playback failed',
+        'Audio playback failed',
       );
+      if(await invoke('playback_backend')==='mpv') {
+        const native=await invoke('native_snapshot');
+        assert(native.playing&&native.duration>0,'libmpv is not supplying the player state');
+        let rejected=false;
+        try{await invoke('native_load',{generation:native.generation,key:'a',paths:['C:/not-prepared/private.wav'],index:0,seconds:0});}catch{rejected=true;}
+        assert(rejected,'Native audio accepted a path outside its prepared station grants');
+        assert((await invoke('native_snapshot')).playing,'Rejected audio command interrupted valid playback');
+        await invoke('native_smoke_report',{phase:'libmpv',ok:true,message:'Real libmpv playback and native file authorization verified'});
+      }
       await until(() => !!document.querySelector('.toast'), 'Native missing-file toast not shown');
       document.querySelector('.toast-details').click();
       await until(() => document.querySelector('dialog')?.open, 'Native file details did not open');

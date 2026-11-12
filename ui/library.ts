@@ -21,6 +21,7 @@ export interface Config {
   [key: string]: unknown;
 }
 export const desktop = isTauri();
+export const playbackBackend = () => invoke<'web'|'mpv'>('playback_backend');
 export const emptyConfig = (): Config => ({
   root: '',
   custom: [],

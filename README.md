@@ -4,6 +4,8 @@ Radio Replay turns your own audio collection into a desktop radio experience. Cr
 
 The current application uses **Rust, Tauri 2, and Svelte 5**, with Web Audio playback inside the system WebView. It replaces the original Electron application, which remains available in Git history.
 
+The `codex/libmpv-playback` development branch includes an **experimental native libmpv audio backend**. WebView2 still renders the interface. See [the preview setup and migration status](docs/libmpv-migration.md) before running it; the normal launch and release workflow still use Web Audio.
+
 The station-tuning experience is inspired by games such as Grand Theft Auto. No game audio, music, or game artwork is included; you supply your own collection.
 
 > [!NOTE]

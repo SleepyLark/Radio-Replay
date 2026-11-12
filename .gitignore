@@ -33,3 +33,5 @@ Thumbs.db
 
 # Local development worktrees
 .rewrite/
+vendor/mpv/
+.mpv-cache/

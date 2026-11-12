@@ -19,7 +19,12 @@ pub fn active() -> bool {
 }
 fn write_result(app: &tauri::AppHandle, smoke: &Smoke, ok: bool, message: &str) {
     let (tray, media) = super::desktop::smoke_status(app);
-    let value = serde_json::json!({"passed":ok,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
+    let backend = if cfg!(feature = "native-audio") {
+        "mpv"
+    } else {
+        "web"
+    };
+    let value = serde_json::json!({"passed":ok,"audioBackend":backend,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
     let _ = std::fs::write(
         smoke.directory.join("report.json"),
         serde_json::to_vec_pretty(&value).unwrap(),
@@ -209,7 +214,7 @@ pub fn native_smoke_report(
         if smoke.mini_done.load(Ordering::Relaxed) && tray && media && !closes_to_tray {
             // The runner must observe this process exiting after the real close
             // event. If it hides instead, the watchdog overwrites this as failed.
-            write_result(&app,&smoke,true,"SQLite restart, app close, WebView2 playback, mini controls, tray and native media verified");
+            write_result(&app,&smoke,true,"SQLite restart, app close, audio playback, mini controls, tray and native media verified");
             window.close().map_err(|e| e.to_string())?;
         } else {
             report(

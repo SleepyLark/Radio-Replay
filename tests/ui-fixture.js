@@ -107,6 +107,8 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         return null;
       case 'load_config':
         return structuredClone(config);
+      case 'playback_backend':
+        return 'web';
       case 'prepare_station': {
         const group = config.groups.find((g) => g.id === args.group);
         const station = config.custom.find((s) => s.key === args.key);

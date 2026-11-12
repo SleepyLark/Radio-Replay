@@ -20,7 +20,7 @@ export interface PlaybackState {
   muted: boolean;
   error: string;
   notice: PlaybackNotice | null;
-  engine: 'stream' | 'buffered';
+  engine: 'stream' | 'buffered' | 'native';
 }
 export interface PlaybackNotice {
   id: number;

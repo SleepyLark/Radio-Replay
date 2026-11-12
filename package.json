@@ -15,7 +15,9 @@
     "test:ui": "npm run build && node tests/ui-browser.cjs",
     "test:audio": "node tests/audio-browser.cjs",
     "check:version": "node scripts/version.mjs",
-    "version:set": "node scripts/version.mjs --set"
+    "version:set": "node scripts/version.mjs --set",
+    "setup:mpv": "node scripts/setup-mpv.mjs",
+    "desktop:mpv": "tauri dev --features native-audio"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

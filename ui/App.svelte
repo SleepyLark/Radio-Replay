@@ -8,6 +8,8 @@
   import Settings from './Settings.svelte';
   import { groupLineup,parseTimedText,currentLine,StationHistory } from './playback/text';
   import { Playback, type PlaybackState } from './playback/engine';
+  import { NativePlayback } from './playback/native';
+  import {playbackBackend} from './library';
   import StationEditor from './StationEditor.svelte';
   import {listenDesktop,publishDesktop,openMini,quitDesktop,type DesktopAction,type DesktopSnapshot} from './desktop';
   import {resolveTuningSound} from './library';
@@ -37,7 +39,7 @@
   let view = $state('Stations');
   let editing = $state(false);
   let editTarget = $state<Station | null>(null);
-  let player: Playback | null = null;
+  let player: Playback | NativePlayback | null = null;
   let playback = $state.raw<PlaybackState | null>(null);
   const activeKey=$derived(playback?.key);
   const playbackNotice=$derived(playback?.notice);
@@ -111,10 +113,17 @@
   const sections=$derived.by(()=>{const result=new Map<string,Station[]>();for(const station of stations){const heading=groupId==='all'?String(station.game??''):'Stations';if(!result.has(heading))result.set(heading,[]);result.get(heading)!.push(station);}return [...result];});
   function groupSaved(next:Config,id:string){saved(next);groupDraft=undefined;if(id!==groupId){groupId=id;changeGroup();}}
   onMount(() => {
-    if(desktop)browserMedia=connectMediaSession(desktopAction);
-    if(desktop) player = new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,tuningSource:async value=>{if(value===''||value==='off')return null;if(typeof value!=='string'||value==='bundled')return bundledStatic;const path=await resolveTuningSound();return path?audioUrl(path):null;},onState:state => {playback = state;if(state.playing&&!state.loading)history.commit(state.key);}});
-    void (async () => { try { config = await loadConfig(); } catch (e) { error = String(e); } finally { busy = false; } })();
     let disposed=false;let unlisten:(()=>void)|undefined;
+    void (async()=>{try{
+      const backend=desktop?await playbackBackend():'web';
+      if(disposed)return;
+      const onState=(state:PlaybackState)=>{playback=state;if(state.playing&&!state.loading)history.commit(state.key);};
+      if(desktop){
+        if(backend==='mpv')player=new NativePlayback({onState});
+        else{browserMedia=connectMediaSession(desktopAction);player=new Playback({prepare:key=>prepareStation(key,groupId),rememberDuration,url:audioUrl,tuningSource:async value=>{if(value===''||value==='off')return null;if(typeof value!=='string'||value==='bundled')return bundledStatic;const path=await resolveTuningSound();return path?audioUrl(path):null;},onState});}
+      }
+      config=await loadConfig();
+    }catch(e){error=String(e);}finally{busy=false;}})();
     let unlistenDrops:(()=>void)|undefined;
     if(desktop)void listenAudioDrops(id=>{readingDrops++;dropTargets.set(id,managing||groupDraft!==undefined?-1:editing?editorSession:0);},drop=>{readingDrops=Math.max(0,readingDrops-1);const target=dropTargets.get(drop.id);dropTargets.delete(drop.id);if(managing||groupDraft!==undefined||target===undefined||target<0||target===0&&editing||target>0&&(!editing||target!==editorSession))return;if(drop.error){error=drop.error;return;}if(target===0)edit(null);droppedTracks=drop.tracks;}).then(stop=>{if(disposed)stop();else unlistenDrops=stop;}).catch(e=>error=String(e));
     if(desktop)void listenDesktop(desktopAction).then(stop=>{if(disposed)stop();else unlisten=stop;}).catch(e=>error=String(e));

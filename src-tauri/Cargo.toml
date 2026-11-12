@@ -6,6 +6,7 @@ license = "MIT"
 
 [features]
 native-smoke = []
+native-audio = ["dep:radio-replay-audio"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -14,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-dialog = "2"
 radio-replay-core = { path = "../crates/core" }
+radio-replay-audio = { path = "../crates/audio", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 souvlaki = "0.8.3"

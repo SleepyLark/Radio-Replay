@@ -5,6 +5,12 @@
   "permissions": [
     "core:default",
     "allow-load-config",
+    "allow-playback-backend",
+    "allow-native-begin",
+    "allow-native-snapshot",
+    "allow-native-control",
+    "allow-native-prepare",
+    "allow-native-load",
     "allow-import-config",
     "allow-choose-audio",
     "allow-choose-artwork",
