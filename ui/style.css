@@ -54,6 +54,9 @@ fieldset {
 }
 .sidebar-meta { flex-wrap: wrap; gap: 8px; }
 .sidebar-meta .library-path { margin-left: auto; }
+.sidebar-meta .mini-action { display:inline-flex; align-items:center; justify-content:center; }
+/* The tuned row already has the selected background and accent border. */
+.sidebar-station.active:focus-visible { outline:none; }
 .manage-import { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0; }
 .manage-import small { color:var(--muted); }
 .settings-exit { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:24px; }

@@ -234,9 +234,7 @@ void (async () => {
       });
       await wait(200);
       assert((await invoke('desktop_snapshot')).playing, 'Closing to tray stopped the player');
-      [...document.querySelectorAll('button')]
-        .find((button) => button.textContent.trim().endsWith('Mini player'))
-        .click();
+      document.querySelector('[aria-label="Mini player"]').click();
       await until(
         () => document.querySelector('.now-playing strong')?.textContent === 'Native B',
         'Main player did not receive mini next',

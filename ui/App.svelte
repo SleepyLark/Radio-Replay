@@ -14,6 +14,7 @@
   import bundledStatic from '../assets/audio/static.mp3?url';
   import StationBanner from './StationBanner.svelte';
   import RadioControls from './RadioControls.svelte';
+  import ControlIcon from './ControlIcon.svelte';
   import TrackTitle from './TrackTitle.svelte';
   import ManageStations from './ManageStations.svelte';
   import {connectMediaSession,mediaKeyAction} from './media-session';
@@ -78,6 +79,16 @@
     tune(lineup[index<0?(direction>0?0:lineup.length-1):(index + direction + lineup.length) % lineup.length]);
   }
   function toggle() { if(playback?.playing) void player?.pause(); else void player?.play(); }
+  async function keyboardStep(direction:number) {
+    const followFocus=document.activeElement?.matches('.sidebar-station');
+    step(direction);
+    if(!followFocus)return;
+    await tick();
+    const selected=document.querySelector<HTMLElement>('.sidebar-station.active');
+    const target=selected??document.querySelector<HTMLElement>('.back-stations');
+    target?.focus({preventScroll:true});
+    selected?.scrollIntoView({block:'nearest',inline:'nearest'});
+  }
   function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
   async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
   function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
@@ -122,8 +133,8 @@
   if(editing || managing || notificationDetails || groupDraft!==undefined || !['Stations','Player'].includes(view) || event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
   if(event.code==='Space'&&event.target instanceof HTMLElement&&event.target.closest('button'))return;
   if(event.code === 'Space') { event.preventDefault(); toggle(); }
-  if(event.key === 'ArrowDown') { event.preventDefault(); step(1); }
-  if(event.key === 'ArrowUp') { event.preventDefault(); step(-1); }
+  if(event.key === 'ArrowDown') { event.preventDefault(); void keyboardStep(1); }
+  if(event.key === 'ArrowUp') { event.preventDefault(); void keyboardStep(-1); }
   if(event.key.toLowerCase() === 'm') player?.mute();
   if(event.key==='+'||event.key==='='){event.preventDefault();player?.setVolume((playback?.volume??.8)+.05);}
   if(event.key==='-'){event.preventDefault();player?.setVolume((playback?.volume??.8)-.05);}
@@ -135,7 +146,7 @@
       <button class="brand" onclick={()=>showView('Stations')} aria-label="Radio Replay home"><span class="signal">◉</span><span><b>RADIO REPLAY</b><small>LOCAL BROADCAST SYSTEM</small></span></button>
       <button class="choose" onclick={()=>edit(null)} disabled={busy||!desktop}>＋ CREATE STATION</button>
       <button class="choose secondary" onclick={()=>managing=true} disabled={busy||!desktop}>MANAGE STATIONS</button>
-      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><button class="config-action" onclick={mini} disabled={!desktop}>Mini player</button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
+      <div class="sidebar-meta"><button class="config-action" onclick={()=>showView('Settings')}>⚙ Settings</button><button class="config-action mini-action" aria-label="Mini player" title="Mini player" onclick={mini} disabled={!desktop}><ControlIcon name="pip"/></button><div class="library-path">{busy?'Loading stations…':`${config.custom.length} station${config.custom.length===1?'':'s'}`}</div></div>
       <div class="groupbar group-selector">
         <select aria-label="Station group" bind:value={groupId} onchange={changeGroup}><option value="all">All stations</option>{#each groups as group}<option value={group.id}>{group.name}</option>{/each}</select>
         <button aria-label="Create group" title="Create group" onclick={()=>groupDraft=null} disabled={!desktop}>＋</button>
