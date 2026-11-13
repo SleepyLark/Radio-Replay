@@ -65,7 +65,8 @@
   const lineIndex=$derived(currentLine(timed,playback?.seconds??0));
   const playingStation=$derived(config.custom.find(s=>s.key===playback?.key));
   const textMode=$derived(playback?.bumper?'ignore':['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
-  const embeddedTitle=$derived(details?.tags.title?`${details.tags.artist?details.tags.artist+' - ':''}${details.tags.title}`:playback?.title??'');
+  const metadataTitle=$derived(details?.tags.title?.trim()??'');
+  const embeddedTitle=$derived(metadataTitle?`${details?.tags.artist?details.tags.artist+' - ':''}${metadataTitle}`:playback?.bumper?'Bumper':playback?.title??'');
   const displayTitle=$derived(textMode==='titles'&&lineIndex>=0?timed[lineIndex].text:embeddedTitle);
   $effect(()=>{ const key=metadataKey,path=metadataPath;details=null;let cancelled=false;if(key&&path)void trackDetails(key,path).then(value=>{if(!cancelled)details=value;}).catch(()=>{});return()=>{cancelled=true;}; });
   const bannerPath=$derived(artworkUrl(playingStation?.bannerPath));
@@ -94,7 +95,7 @@
   }
   function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
   async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
-  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:playback?.bumper?'Bumper · '+(details?.tags.title||playback?.title||''):textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
+  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:playback?.bumper?(metadataTitle?'Bumper · '+metadataTitle:'Bumper'):textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
   function edit(station: Station | null) { editorSession++;droppedTracks=[];editTarget = station; editing = true; }
   function saved(next: Config) {
     const wasPlaying=playback?.playing;

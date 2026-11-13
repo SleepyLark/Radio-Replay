@@ -70,7 +70,7 @@ export class NativePlayback {
     if(this.disposed||value.generation!==this.generation||value.sequence<this.sequence)return;
     this.sequence=value.sequence;
     const track=this.order[value.index];
-    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted,bumper:value.bumper===true});
+    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:value.bumper?'Bumper':track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted,bumper:value.bumper===true});
     if(!this.hasBumpers&&value.path&&value.path!==this.lastPath&&this.clock&&!value.loading){
       this.lastPath=value.path;
       this.clock.origin=this.now();

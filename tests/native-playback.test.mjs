@@ -109,7 +109,7 @@ test('native bumper catalogue stays separate from music clock and exposes the ac
     assert.equal(plan.bumperCount,1);
     assert.equal(plan.fade,5,'A short bumper must not reduce music-to-music fades');
     emit({index:2,path:'clip',seconds:.4,duration:1,bumper:true});
-    assert.equal(player.state.title,'clip');assert.equal(player.state.bumper,true);
+    assert.equal(player.state.title,'Bumper');assert.equal(player.state.bumper,true);
     emit({index:1,path:plan.paths[1],seconds:0,duration:10,bumper:false});
     assert.equal(player.state.title,plan.paths[1]);assert.equal(player.state.bumper,false);
     player.stop();assert.equal(player.state.bumper,false);
