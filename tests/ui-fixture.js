@@ -146,6 +146,8 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         };
       case 'remember_duration':
         return null;
+      case 'choose_bumper_folder':
+        return 'C:\\Radio\\Bumpers';
       case 'save_station': {
         const edit = args.edit;
         config.custom = config.custom.map((s) =>

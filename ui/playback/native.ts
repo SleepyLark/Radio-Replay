@@ -1,6 +1,6 @@
 import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
-import type {Station,PreparedStation,TrackProblem} from '../library';
+import type {Station,PreparedStation,TrackProblem,PlayableTrack} from '../library';
 import type {PlaybackState,PlaybackNotice} from './engine';
 import {clockFor,fadeSeconds,position,shuffle,type Clock} from './timeline.ts';
 import {tuningMilliseconds} from './tuning.ts';
@@ -9,6 +9,7 @@ export interface NativeSnapshot {
   generation:number;sequence:number;index:number;path:string;seconds:number;duration:number;
   playing:boolean;loading:boolean;volume:number;muted:boolean;error:string;errorPath:string;issueRevision:number;
   tuning?:boolean;tuningPlaying?:boolean;nextPath?:string;transitioning?:boolean;transitionProgress?:number;
+  bumper?:boolean;
 }
 type Invoke=<T>(command:string,args?:Record<string,unknown>)=>Promise<T>;
 interface Options {
@@ -32,6 +33,8 @@ export class NativePlayback {
   private issueRevision=0;
   private station:Station|null=null;
   private clock:Clock|null=null;
+  private order:PlayableTrack[]=[];
+  private hasBumpers=false;
   private clocks=new Map<string,{signature:string;clock:Clock}>();
   private problems=new Map<string,TrackProblem>();
   private measured=new Set<string>();
@@ -66,9 +69,9 @@ export class NativePlayback {
   private apply(value:NativeSnapshot) {
     if(this.disposed||value.generation!==this.generation||value.sequence<this.sequence)return;
     this.sequence=value.sequence;
-    const track=this.clock?.order[value.index];
-    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted});
-    if(value.path&&value.path!==this.lastPath&&this.clock&&!value.loading){
+    const track=this.order[value.index];
+    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted,bumper:value.bumper===true});
+    if(!this.hasBumpers&&value.path&&value.path!==this.lastPath&&this.clock&&!value.loading){
       this.lastPath=value.path;
       this.clock.origin=this.now();
       this.clock.offset=this.clock.steps.slice(0,value.index).reduce((a,b)=>a+b,0)+value.seconds;
@@ -76,7 +79,7 @@ export class NativePlayback {
     if(value.issueRevision!==this.issueRevision){
       this.issueRevision=value.issueRevision;
       if(value.error){
-        const failedTrack=this.clock?.order.find(track=>track.path===value.errorPath);
+        const failedTrack=this.order.find(track=>track.path===value.errorPath);
         this.problems.set(`file:${value.errorPath}`,{path:value.errorPath,name:failedTrack?.name??value.errorPath,reason:value.error,kind:'file'});
         this.notice(value.error,!value.loading&&!value.playing?'error':'warning');
       }
@@ -97,8 +100,8 @@ export class NativePlayback {
   }
   async tune(station:Station,settings:Record<string,unknown>={},group='all') {
     const token=++this.token;
-    this.station=station;this.clock=null;this.lastPath='';this.sequence=0;this.issueRevision=0;this.problems.clear();
-    this.emit({key:station.key,station:station.station,title:'Tuning…',path:'',playing:false,loading:true,error:'',notice:null,seconds:0,duration:0});
+    this.station=station;this.clock=null;this.order=[];this.hasBumpers=false;this.lastPath='';this.sequence=0;this.issueRevision=0;this.problems.clear();
+    this.emit({key:station.key,station:station.station,title:'Tuning…',path:'',playing:false,loading:true,error:'',notice:null,seconds:0,duration:0,bumper:false});
     try {
       await this.ready;if(token!==this.token||this.disposed)return;
       const started=await this.rpc<NativeSnapshot>('native_begin',{delayMs:tuningMilliseconds(settings,this.random)});
@@ -110,7 +113,9 @@ export class NativePlayback {
       const tracks=prepared.tracks.filter(track=>typeof track.duration==='number'&&track.duration>0);
       if(!tracks.length)throw new Error('No playable tracks in this station.');
       const requestedFade=fadeSeconds(station,settings);
-      const signature=JSON.stringify([tracks.map(track=>[track.path,track.size,track.modified]),station.mode,requestedFade]);
+      const bumpers=station.mode==='tracks'?(prepared.bumpers??[]).filter(track=>typeof track.duration==='number'&&track.duration>0):[];
+      this.hasBumpers=bumpers.length>0;
+      const signature=JSON.stringify([tracks.map(track=>[track.path,track.size,track.modified]),station.mode,requestedFade,station.bumpers,bumpers.map(track=>[track.path,track.size,track.modified])]);
       const key=`${group}:${station.key}`;const existing=this.clocks.get(key);
       const order=existing?.signature===signature?existing.clock.order:station.mode==='longset'?tracks:shuffle(tracks,this.random);
       const durations=new Map(tracks.map(track=>[track.path,track.duration!]));
@@ -120,7 +125,8 @@ export class NativePlayback {
       for(const [id,value] of this.clocks){if(this.clocks.size<=32&&retained<=20000)break;if(id===key)continue;this.clocks.delete(id);retained-=value.clock.order.length;}
       this.notice('');
       const at=position(this.clock,this.now());
-      const loaded=await this.rpc<NativeSnapshot>('native_load',{generation:this.generation,key:station.key,paths:order.map(track=>track.path),index:at.index,seconds:at.seconds,fade:this.clock.fade});
+      this.order=[...order,...bumpers];
+      const loaded=await this.rpc<NativeSnapshot>('native_load',{generation:this.generation,key:station.key,paths:this.order.map(track=>track.path),index:at.index,seconds:at.seconds,fade:this.clock.fade,bumperCount:bumpers.length,programmeContext:group,seed:Math.floor(this.random()*4294967296)});
       if(token===this.token&&!this.disposed)this.apply(loaded);
     }catch(error){
       if(token===this.token&&!this.disposed){
@@ -137,7 +143,7 @@ export class NativePlayback {
   async play(){if(this.station)await this.control({type:'play'});}
   mute(){void this.control({type:'mute'});}
   setVolume(value:number){if(Number.isFinite(value))void this.control({type:'volume',value:Math.max(0,Math.min(1,value))});}
-  stop(){const generation=this.generation;this.token++;this.station=null;this.clock=null;this.problems.clear();this.emit({key:'',station:'',title:'',path:'',playing:false,loading:false,seconds:0,duration:0,error:'',notice:null});void this.ready.then(()=>this.rpc<NativeSnapshot>('native_control',{control:{type:'stop'},generation})).then(state=>{if(!this.station&&!this.disposed){this.generation=state.generation;this.apply(state);}}).catch(()=>{});}
+  stop(){const generation=this.generation;this.token++;this.station=null;this.clock=null;this.order=[];this.hasBumpers=false;this.problems.clear();this.emit({key:'',station:'',title:'',path:'',playing:false,loading:false,seconds:0,duration:0,error:'',notice:null,bumper:false});void this.ready.then(()=>this.rpc<NativeSnapshot>('native_control',{control:{type:'stop'},generation})).then(state=>{if(!this.station&&!this.disposed){this.generation=state.generation;this.apply(state);}}).catch(()=>{});}
   clearCache(){this.clocks.clear();this.measured.clear();}
   invalidate(){this.stop();this.clearCache();}
   dispose(){this.stop();this.disposed=true;this.unlisten?.();}

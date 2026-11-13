@@ -9,6 +9,7 @@ fn main() {
         "native_load",
         "import_config",
         "choose_audio",
+        "choose_bumper_folder",
         "choose_artwork",
         "prepare_station",
         "track_details",

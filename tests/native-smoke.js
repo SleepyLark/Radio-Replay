@@ -262,6 +262,30 @@ void (async () => {
       const final = await invoke('desktop_snapshot');
       assert(Math.abs(final.volume - 0.25) < 0.001, 'Mini volume did not persist');
       await invoke('save_settings', { patch: { closeToTray: false } });
+      if(audioBackend==='mpv') {
+        await invoke('native_smoke_report',{phase:'prepareBumpers',ok:true,message:'Preparing isolated music station and bumper folder'});
+        const started=await invoke('native_begin',{delayMs:0});
+        const prepared=await invoke('native_prepare',{generation:started.generation,key:'a',group:'all'});
+        assert(prepared.tracks.length===2&&prepared.bumpers.length===1,'Bumper folder was not prepared separately');
+        assert(Math.abs(prepared.bumpers[0].duration-2)<.1,'Bumper duration was not measured');
+        const paths=[...prepared.tracks,...prepared.bumpers].map(t=>t.path);
+        await invoke('native_load',{generation:started.generation,key:'a',paths,index:0,seconds:9.5,fade:1,bumperCount:1,programmeContext:'all',seed:19});
+        await until(async()=>{const s=await invoke('native_snapshot');return s.bumper&&s.playing;},'Native IPC never entered bumper');
+        let clip=await invoke('native_snapshot');
+        assert(clip.index===2&&clip.path===paths[2]&&!clip.transitioning,'Bumper overlapped music or used wrong file');
+        await invoke('native_control',{control:{type:'pause'}});
+        clip=await invoke('native_snapshot');await wait(200);
+        const paused=await invoke('native_snapshot');
+        assert(!paused.playing&&Math.abs(paused.seconds-clip.seconds)<.1,'Bumper did not pause');
+        await invoke('native_control',{control:{type:'play'}});
+        await until(async()=>{const s=await invoke('native_snapshot');return !s.bumper&&s.index===1&&s.playing;},'Music queue did not resume after bumper');
+        const again=await invoke('native_begin',{delayMs:0});
+        const cached=await invoke('native_prepare',{generation:again.generation,key:'a',group:'all'});
+        assert(cached.bumpers[0].duration>0,'Bumper duration was not cached');
+        await invoke('native_load',{generation:again.generation,key:'a',paths,index:0,seconds:0,fade:1,bumperCount:1,programmeContext:'all',seed:19});
+        await until(async()=>{const s=await invoke('native_snapshot');return s.index===1&&s.playing;},'Native IPC lost station programme on retune');
+        await invoke('native_smoke_report',{phase:'bumpers',ok:true,message:'Folder preparation, cached duration, no-overlap insertion, pause, next song and retune verified through native IPC'});
+      }
       await invoke('native_smoke_report', {
         phase: 'complete',
         ok: true,

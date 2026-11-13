@@ -49,6 +49,8 @@ pub struct TrackProblem {
 #[derive(Serialize)]
 pub struct PreparedStation {
     pub tracks: Vec<PlayableTrack>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bumpers: Vec<PlayableTrack>,
     pub problems: Vec<TrackProblem>,
 }
 
@@ -62,9 +64,12 @@ fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String
         .iter()
         .find(|s| s.key == key)
         .ok_or("Station no longer exists")?;
+    Ok(report_tracks(&station.tracks))
+}
+pub fn report_tracks(tracks: &[Track]) -> PreparedStation {
     let mut files = Vec::new();
     let mut problems = Vec::new();
-    for track in &station.tracks {
+    for track in tracks {
         let path = Path::new(&track.path);
         let resolved = (|| -> Result<_, String> {
             if !audio_file(path) {
@@ -111,10 +116,51 @@ fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String
             cache_signature: crate::metadata::Cache::signature_from_metadata(&meta),
         });
     }
-    Ok(PreparedStation {
+    PreparedStation {
         tracks: files,
+        bumpers: Vec::new(),
         problems,
-    })
+    }
+}
+pub fn bumper_report(config: &Config, key: &str) -> PreparedStation {
+    let mut report = report_tracks(&[]);
+    let result = (|| {
+        let station = config
+            .custom
+            .iter()
+            .find(|s| s.key == key)
+            .ok_or("Station unavailable")?;
+        let Some(settings) = crate::bumpers::Settings::from_station(station)? else {
+            return Ok(());
+        };
+        let mut tracks = scan_folder(Path::new(&settings.folder))?;
+        if tracks.len() > 1000 {
+            return Err("Bumper folders are limited to 1,000 audio files".to_string());
+        }
+        if tracks.is_empty() {
+            return Err("No supported audio clips in the bumper folder".into());
+        }
+        tracks.sort_by(|a, b| a.path.cmp(&b.path));
+        report = report_tracks(&tracks);
+        Ok::<(), String>(())
+    })();
+    if let Err(reason) = result {
+        report.problems.push(TrackProblem {
+            path: config
+                .custom
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.extra.get("bumpers"))
+                .and_then(|b| b.get("folder"))
+                .and_then(|f| f.as_str())
+                .unwrap_or("")
+                .into(),
+            name: "Bumper folder".into(),
+            reason,
+            kind: "file",
+        });
+    }
+    report
 }
 pub fn playback_files_for_group(
     config: Config,
@@ -313,6 +359,29 @@ pub fn upsert(
     }
     for (key, value) in &edit.options {
         let valid = match key.as_str() {
+            "bumpers" => {
+                if value.is_null() {
+                    true
+                } else if let Ok(settings) =
+                    serde_json::from_value::<crate::bumpers::Settings>(value.clone())
+                {
+                    let retained = config.custom.iter().any(|s| {
+                        s.key == edit.key
+                            && s.extra
+                                .get("bumpers")
+                                .and_then(|b| b.get("folder"))
+                                .and_then(|f| f.as_str())
+                                == Some(settings.folder.as_str())
+                    });
+                    settings.validate().is_ok()
+                        && (!settings.enabled || edit.mode == "tracks")
+                        && (settings.folder.is_empty()
+                            || retained
+                            || audio.contains(&crate::bumpers::folder_grant(&settings.folder)))
+                } else {
+                    false
+                }
+            }
             "crossfade" => {
                 value.is_null()
                     || value

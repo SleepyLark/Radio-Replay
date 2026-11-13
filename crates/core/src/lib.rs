@@ -1,4 +1,5 @@
 //! Portable domain and persistence layer. No windowing or playback dependencies.
+pub mod bumpers;
 pub mod desktop;
 pub mod library;
 pub mod metadata;

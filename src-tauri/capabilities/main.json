@@ -13,6 +13,7 @@
     "allow-native-load",
     "allow-import-config",
     "allow-choose-audio",
+    "allow-choose-bumper-folder",
     "allow-choose-artwork",
     "allow-prepare-station",
     "allow-track-details",

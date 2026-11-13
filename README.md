@@ -34,6 +34,9 @@ Older releases, including the original `v0.5.0`, contain the Electron applicatio
 
 ## Features
 
+This development fork adds optional between-song clips with song-count or
+listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md).
+
 - Create stations from files, folders, or audio dropped into the app.
 - Shuffle songs as a **Music station**, or play recordings in order as a **Radio broadcast**.
 - Keep station timelines moving while listening elsewhere, without playing hidden audio.

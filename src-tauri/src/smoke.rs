@@ -207,6 +207,31 @@ pub fn native_smoke_report(
     if phase == "mini" && window.label() == "mini" {
         smoke.mini_done.store(true, Ordering::Relaxed);
     }
+    if phase == "prepareBumpers" && window.label() == "main" {
+        let folder = smoke.directory.join("bumpers");
+        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        let mut wav =
+            std::fs::read(smoke.directory.join("fixture-0.wav")).map_err(|e| e.to_string())?;
+        wav.truncate(44 + 2 * 8000 * 2);
+        let data_length = (wav.len() - 44) as u32;
+        wav[4..8].copy_from_slice(&(data_length + 36).to_le_bytes());
+        wav[40..44].copy_from_slice(&data_length.to_le_bytes());
+        std::fs::write(folder.join("bumper.wav"), wav).map_err(|e| e.to_string())?;
+        let library = app.state::<super::Library>();
+        let store = library.0.lock().map_err(|e| e.to_string())?;
+        let mut config = store.load()?;
+        let station = config
+            .custom
+            .iter_mut()
+            .find(|s| s.key == "a")
+            .ok_or("Missing fixture")?;
+        station.extra.insert("mode".into(), "tracks".into());
+        station.extra.insert(
+            "bumpers".into(),
+            serde_json::json!({"enabled":true,"folder":folder,"method":"songs","min":1,"max":1}),
+        );
+        store.save(&config)?;
+    }
     if phase == "complete" && window.label() == "main" {
         let (tray, media) = super::desktop::smoke_status(&app);
         let config = app

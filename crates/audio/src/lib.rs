@@ -1,6 +1,7 @@
 //! Small libmpv client boundary. Handles stay on their creating worker thread.
 //! Only local audio is accepted in this stage; network stations are a later mode.
 pub mod player;
+pub mod programme;
 mod runtime;
 use libloading::Library;
 use std::{

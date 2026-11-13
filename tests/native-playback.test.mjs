@@ -98,3 +98,29 @@ test('native tuning sends the minimum delay and clamps fades to half the shortes
     assert.equal(calls.filter(call=>call.command==='native_load').at(-1).args.fade,0);
   }finally{player.dispose();}
 });
+
+test('native bumper catalogue stays separate from music clock and exposes the active clip',async()=>{
+  const {player,calls,emit}=setup(async()=>({tracks:[track('song-a'),track('song-b')],bumpers:[{...track('clip'),duration:1}],problems:[]}));
+  try {
+    await player.tune({...station('radio'),mode:'tracks',crossfade:5000,bumpers:{enabled:true,folder:'clips',method:'songs',min:2,max:5}});
+    const plan=calls.find(call=>call.command==='native_load').args;
+    assert.deepEqual(new Set(plan.paths.slice(0,2)),new Set(['song-a','song-b']));
+    assert.equal(plan.paths[2],'clip');
+    assert.equal(plan.bumperCount,1);
+    assert.equal(plan.fade,5,'A short bumper must not reduce music-to-music fades');
+    emit({index:2,path:'clip',seconds:.4,duration:1,bumper:true});
+    assert.equal(player.state.title,'clip');assert.equal(player.state.bumper,true);
+    emit({index:1,path:plan.paths[1],seconds:0,duration:10,bumper:false});
+    assert.equal(player.state.title,plan.paths[1]);assert.equal(player.state.bumper,false);
+    player.stop();assert.equal(player.state.bumper,false);
+  }finally{player.dispose();}
+});
+
+test('continuous broadcasts never load a bumper catalogue',async()=>{
+  const {player,calls}=setup(async()=>({tracks:[track('broadcast')],bumpers:[track('clip')],problems:[]}));
+  try {
+    await player.tune(station('radio'));
+    const plan=calls.find(call=>call.command==='native_load').args;
+    assert.deepEqual(plan.paths,['broadcast']);assert.equal(plan.bumperCount,0);
+  }finally{player.dispose();}
+});

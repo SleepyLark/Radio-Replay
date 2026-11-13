@@ -117,6 +117,7 @@ fn main() -> Result<(), String> {
             index: 0,
             seconds: 2.5,
             fade: 0.0,
+            bumpers: None,
         },
     )?;
     let until = Instant::now() + Duration::from_secs(6);
@@ -155,6 +156,7 @@ fn main() -> Result<(), String> {
             index: 0,
             seconds: 0.0,
             fade: 0.0,
+            bumpers: None,
         },
     )?;
     std::thread::sleep(Duration::from_millis(250));

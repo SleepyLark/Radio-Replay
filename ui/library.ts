@@ -9,8 +9,10 @@ export interface Station {
   key: string;
   station: string;
   tracks: Track[];
+  bumpers?: BumperSettings|null;
   [key: string]: unknown;
 }
+export interface BumperSettings {enabled:boolean;folder:string;method:'songs'|'time';min:number;max:number;}
 export interface Config {
   root: string;
   custom: Station[];
@@ -46,6 +48,7 @@ export interface TrackProblem {
 }
 export interface PreparedStation {
   tracks: PlayableTrack[];
+  bumpers?: PlayableTrack[];
   problems: TrackProblem[];
 }
 export const prepareStation = (key: string, group = 'all') =>
@@ -86,6 +89,7 @@ export interface StationEdit {
   options?: Record<string, unknown>;
 }
 export const chooseAudio = (folder: boolean) => invoke<Track[]>('choose_audio', { folder });
+export const chooseBumperFolder = () => invoke<string|null>('choose_bumper_folder');
 export const chooseArtwork = () => invoke<string | null>('choose_artwork');
 export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });
 export const deleteStation = (key: string) => invoke<Config>('delete_station', { key });

@@ -64,7 +64,7 @@
   const timed=$derived(parseTimedText(details?.sidecar??null));
   const lineIndex=$derived(currentLine(timed,playback?.seconds??0));
   const playingStation=$derived(config.custom.find(s=>s.key===playback?.key));
-  const textMode=$derived(['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
+  const textMode=$derived(playback?.bumper?'ignore':['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
   const embeddedTitle=$derived(details?.tags.title?`${details.tags.artist?details.tags.artist+' - ':''}${details.tags.title}`:playback?.title??'');
   const displayTitle=$derived(textMode==='titles'&&lineIndex>=0?timed[lineIndex].text:embeddedTitle);
   $effect(()=>{ const key=metadataKey,path=metadataPath;details=null;let cancelled=false;if(key&&path)void trackDetails(key,path).then(value=>{if(!cancelled)details=value;}).catch(()=>{});return()=>{cancelled=true;}; });
@@ -94,12 +94,12 @@
   }
   function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
   async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
-  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
+  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:playback?.bumper?'Bumper · '+(details?.tags.title||playback?.title||''):textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
   function edit(station: Station | null) { editorSession++;droppedTracks=[];editTarget = station; editing = true; }
   function saved(next: Config) {
     const wasPlaying=playback?.playing;
     const before=config.custom.find(s=>s.key===playback?.key), after=next.custom.find(s=>s.key===playback?.key);
-    const changed=before && (!after || (before.mode??'longset')!==(after.mode??'longset') || (before.crossfade??null)!==(after.crossfade??null) || JSON.stringify(before.tracks.map(t=>t.path))!==JSON.stringify(after.tracks.map(t=>t.path)) || JSON.stringify(config.groups.find(g=>g.id===groupId))!==JSON.stringify(next.groups.find(g=>g.id===groupId)));
+    const changed=before && (!after || (before.mode??'longset')!==(after.mode??'longset') || (before.crossfade??null)!==(after.crossfade??null) || JSON.stringify(before.bumpers??null)!==JSON.stringify(after.bumpers??null) || JSON.stringify(before.tracks.map(t=>t.path))!==JSON.stringify(after.tracks.map(t=>t.path)) || JSON.stringify(config.groups.find(g=>g.id===groupId))!==JSON.stringify(next.groups.find(g=>g.id===groupId)));
     if(changed){player?.invalidate();history=new StationHistory();}
     config=next;active=next.custom.find(s=>s.key===active?.key)??null;editing=false;
     if(!active&&view==='Player')showView('Stations');
@@ -185,7 +185,7 @@
             <StationBanner station={playingStation??active} logo={config.logos[active.key]} number={Math.max(1,lineup.findIndex(s=>s.key===active?.key)+1)} playing={playback?.playing} layout={config.settings.bannerLayout??'row'}/>
             <button class="logo-action edit-link" onclick={()=>edit(active)}>Edit station</button>
             <section class="now"><div class="now-content">
-              <div class="on-air"><i></i>{playback?.loading?'TUNING':playback?.playing?'ON AIR':'PAUSED'}</div>
+              <div class="on-air"><i></i>{playback?.loading?'TUNING':playback?.playing?(playback.bumper?'BUMPER':'ON AIR'):'PAUSED'}</div>
               <TrackTitle text={displayTitle||'Tuning…'} speed={Number(config.settings.bounceSpeed)||25} reduced={config.settings.reduceMotion===true}/>
               {#if details?.tags.album}<div class="track-album">{details.tags.album}</div>{/if}
               {#if textMode==='lyrics'&&lineIndex>=0}<div class="metadata lyrics" aria-label="Synchronized lyrics"><span class="current">{timed[lineIndex].text}</span></div>{/if}

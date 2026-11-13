@@ -1,10 +1,12 @@
 use radio_replay_audio::player::{Control, Plan, Player, Snapshot, Tuning};
+use radio_replay_audio::programme::{Bumpers, Interval};
 use radio_replay_core::{
     library::{self, PreparedStation, TrackProblem},
     metadata,
 };
 use std::{
     collections::HashSet,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -186,14 +188,27 @@ pub async fn native_prepare(
         };
         current()?;
         let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+        let mut bumper_report = library::bumper_report(&config, &key);
         let mut report = library::playback_report_for_group(config, &key, group.as_deref())?;
+        report.problems.append(&mut bumper_report.problems);
         cache
             .0
             .lock()
             .map_err(|e| e.to_string())?
             .populate_durations(&mut report.tracks);
+        cache
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .populate_durations(&mut bumper_report.tracks);
         let mut playable = Vec::new();
-        for mut track in report.tracks {
+        let mut prepared_bumpers = Vec::new();
+        for (mut track, is_bumper) in report
+            .tracks
+            .into_iter()
+            .map(|t| (t, false))
+            .chain(bumper_report.tracks.into_iter().map(|t| (t, true)))
+        {
             current()?;
             if track.duration.is_none() {
                 track.duration = cache
@@ -237,7 +252,11 @@ pub async fn native_prepare(
                 .duration
                 .is_some_and(|n| n.is_finite() && n > 0.0 && n <= 172800.0)
             {
-                playable.push(track);
+                if is_bumper {
+                    prepared_bumpers.push(track);
+                } else {
+                    playable.push(track);
+                }
             } else {
                 report.problems.push(TrackProblem {
                     path: track.track.path.clone(),
@@ -251,14 +270,15 @@ pub async fn native_prepare(
         // Native audio needs no browser asset grants. Retain prepared-file identity
         // for metadata IPC and validate it again before handing paths to libmpv.
         let mut grants = library.3.lock().map_err(|e| e.to_string())?;
-        if grants.len() + playable.len() > 100000 {
+        if grants.len() + playable.len() + prepared_bumpers.len() > 100000 {
             grants.clear();
         }
-        for track in &playable {
+        for track in playable.iter().chain(prepared_bumpers.iter()) {
             grants.insert(format!("{key}\0{}", track.track.path), track.clone());
         }
         Ok(PreparedStation {
             tracks: playable,
+            bumpers: prepared_bumpers,
             problems: report.problems,
         })
     })
@@ -275,6 +295,9 @@ pub async fn native_load(
     index: usize,
     seconds: f64,
     fade: Option<f64>,
+    bumper_count: Option<usize>,
+    programme_context: Option<String>,
+    seed: Option<u32>,
 ) -> Result<Snapshot, String> {
     main_only(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -293,19 +316,78 @@ pub async fn native_load(
             return Err("Invalid native playback plan".into());
         }
         let library = app.state::<super::Library>();
-        let mut seen = HashSet::new();
+        let bumper_count = bumper_count.unwrap_or(0);
+        if bumper_count >= paths.len() || bumper_count > 1000 {
+            return Err("Invalid bumper count".into());
+        }
+        let music_count = paths.len() - bumper_count;
+        let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+        let station = config
+            .custom
+            .iter()
+            .find(|s| s.key == key)
+            .ok_or("Station unavailable")?;
+        let settings = if bumper_count > 0 {
+            radio_replay_core::bumpers::Settings::from_station(station)?
+        } else {
+            None
+        };
+        if bumper_count > 0 && settings.is_none() {
+            return Err("Bumpers are not enabled on this music station".into());
+        }
+        if index >= music_count {
+            return Err("Initial playback must select a music track".into());
+        }
+        let mut seen_music = HashSet::new();
+        let mut seen_bumpers = HashSet::new();
         let mut approved = Vec::with_capacity(paths.len());
-        for path in paths {
-            if !seen.insert(path.clone()) {
+        let mut lengths = Vec::with_capacity(paths.len());
+        let mut revision = std::collections::hash_map::DefaultHasher::new();
+        for (i, path) in paths.into_iter().enumerate() {
+            let unique = if i < music_count {
+                seen_music.insert(path.clone())
+            } else {
+                seen_bumpers.insert(path.clone())
+            };
+            if !unique {
                 return Err("Duplicate native playback path".into());
             }
             let track = super::saved_audio(&library, &key, &path)?;
+            lengths.push(track.duration.unwrap_or(0.0));
+            track.cache_signature.hash(&mut revision);
             let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
             if metadata::Cache::signature_from_metadata(&metadata) != track.cache_signature {
                 return Err("Audio changed after station preparation; tune again".into());
             }
             approved.push(PathBuf::from(path));
         }
+        let bumpers = if bumper_count > 0 {
+            let settings = settings.unwrap();
+            let context = programme_context.unwrap_or_else(|| "all".into());
+            if context.len() > 1024 {
+                return Err("Invalid programme context".into());
+            }
+            Some(Bumpers {
+                music_count,
+                lengths,
+                interval: if settings.method == "songs" {
+                    Interval::Songs {
+                        min: settings.min as u32,
+                        max: settings.max as u32,
+                    }
+                } else {
+                    Interval::Time {
+                        min: settings.min * 60.0,
+                        max: settings.max * 60.0,
+                    }
+                },
+                seed: seed.unwrap_or(1),
+                context: format!("{key}\0{context}"),
+                revision: revision.finish(),
+            })
+        } else {
+            None
+        };
         native.0.load(
             generation,
             Plan {
@@ -313,6 +395,7 @@ pub async fn native_load(
                 index,
                 seconds,
                 fade: fade.unwrap_or(0.0),
+                bumpers,
             },
         )
     })

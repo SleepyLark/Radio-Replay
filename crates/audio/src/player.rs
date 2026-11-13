@@ -32,6 +32,7 @@ pub struct Snapshot {
     pub next_path: String,
     pub transitioning: bool,
     pub transition_progress: f64,
+    pub bumper: bool,
 }
 #[derive(Clone)]
 pub struct Plan {
@@ -39,6 +40,7 @@ pub struct Plan {
     pub index: usize,
     pub seconds: f64,
     pub fade: f64,
+    pub bumpers: Option<crate::programme::Bumpers>,
 }
 #[derive(Clone, Default)]
 pub struct Tuning {

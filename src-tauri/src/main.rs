@@ -265,6 +265,32 @@ async fn choose_audio(
 }
 
 #[tauri::command]
+async fn choose_bumper_folder(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    library: State<'_, Library>,
+) -> Result<Option<String>, String> {
+    if window.label() != "main" {
+        return Err("Main player required".into());
+    }
+    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = std::fs::canonicalize(folder.into_path().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if !path.is_dir() {
+        return Err("Choose a folder of bumper clips".into());
+    }
+    let path = path.to_string_lossy().into_owned();
+    library
+        .1
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(radio_replay_core::bumpers::folder_grant(&path));
+    Ok(Some(path))
+}
+
+#[tauri::command]
 async fn choose_artwork(
     app: tauri::AppHandle,
     library: State<'_, Library>,
@@ -336,6 +362,10 @@ fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config
                 .iter()
                 .map(|t| &t.path)
                 .ne(edit.tracks.iter().map(|t| &t.path))
+                || edit.options.get("bumpers").is_some_and(|b| {
+                    s.extra.get("bumpers").filter(|v| !v.is_null())
+                        != Some(b).filter(|v| !v.is_null())
+                })
         })
         .unwrap_or(true);
     library::upsert(
@@ -461,6 +491,7 @@ fn main() {
                 load_config,
                 import_config,
                 choose_audio,
+                choose_bumper_folder,
                 choose_artwork,
                 prepare_station,
                 track_details,

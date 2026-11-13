@@ -1,10 +1,11 @@
 //! Worker-only state machine. At most two contexts: current/probe and static/next.
 use crate::{
     player::{Control, Plan, Snapshot, Tuning},
+    programme::Cursor,
     Event, Mpv,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     path::PathBuf,
     sync::mpsc::Sender,
     time::{Duration, Instant},
@@ -36,6 +37,13 @@ struct Fade {
     start: f64,
     duration: f64,
 }
+struct SavedProgramme {
+    context: String,
+    signature: u64,
+    cursor: Cursor,
+    seconds: f64,
+    anchor: Instant,
+}
 pub(crate) struct Runtime {
     library: PathBuf,
     mpv: Mpv,
@@ -52,6 +60,8 @@ pub(crate) struct Runtime {
     fade: Option<Fade>,
     // Do not repeatedly try to create a context if its initialization fails.
     auxiliary_failed: bool,
+    programme: Option<Cursor>,
+    programmes: VecDeque<SavedProgramme>,
 }
 fn drain(mpv: &mut Mpv) {
     for _ in 0..128 {
@@ -89,10 +99,76 @@ impl Runtime {
             load_started: Instant::now(),
             fade: None,
             auxiliary_failed: false,
+            programme: None,
+            programmes: VecDeque::new(),
         })
     }
     pub(crate) fn idle(&self) -> bool {
         self.plan.is_none() && !self.state.loading
+    }
+    fn fade_between(&self, a: usize, b: usize) -> f64 {
+        let Some(plan) = &self.plan else {
+            return 0.0;
+        };
+        plan.bumpers
+            .as_ref()
+            .map(|spec| spec.fade_between(a, b, plan.fade))
+            .unwrap_or(plan.fade)
+    }
+    fn next_programme(&self, skip: bool) -> Option<Cursor> {
+        let plan = self.plan.as_ref()?;
+        let spec = plan.bumpers.as_ref()?;
+        let current = self.programme.as_ref()?;
+        let mut next = if skip {
+            current.skip(spec, plan.fade)
+        } else {
+            current.following(spec, plan.fade)
+        };
+        for _ in 0..=plan.paths.len() {
+            if !self.blocked.contains(&next.current) {
+                return Some(next);
+            }
+            if next.current >= spec.music_count {
+                let last = current
+                    .previous_bumper()
+                    .map(|index| index + spec.music_count);
+                let alternate = (spec.music_count..plan.paths.len())
+                    .find(|index| !self.blocked.contains(index) && Some(*index) != last)
+                    .or_else(|| {
+                        (spec.music_count..plan.paths.len())
+                            .find(|index| !self.blocked.contains(index))
+                    });
+                if let Some(index) = alternate {
+                    next.replace_bumper(spec, index);
+                    return Some(next);
+                }
+            }
+            next = next.skip(spec, plan.fade);
+        }
+        None
+    }
+    fn save_programme(&mut self) {
+        if !self.ready || self.state.loading || self.programme.is_none() {
+            return;
+        }
+        self.read_position();
+        let (Some(plan), Some(cursor)) = (&self.plan, &self.programme) else {
+            return;
+        };
+        let Some(spec) = &plan.bumpers else {
+            return;
+        };
+        self.programmes.retain(|old| old.context != spec.context);
+        self.programmes.push_back(SavedProgramme {
+            context: spec.context.clone(),
+            signature: spec.signature(&plan.paths, plan.fade),
+            cursor: cursor.clone(),
+            seconds: self.state.seconds,
+            anchor: Instant::now(),
+        });
+        while self.programmes.len() > 32 {
+            self.programmes.pop_front();
+        }
     }
     fn issue(&mut self, path: String, error: String) {
         self.state.error_path = path;
@@ -124,6 +200,8 @@ impl Runtime {
         // Idle players retain neither a second decoder nor its demuxer buffers.
         self.auxiliary = None;
         self.plan = None;
+        self.programme = None;
+        self.state.bumper = false;
         self.ready = false;
         self.want_play = false;
         self.state.loading = false;
@@ -153,6 +231,7 @@ impl Runtime {
         Ok(self.auxiliary.as_mut().unwrap())
     }
     pub(crate) fn begin(&mut self, id: u64, tuning: Tuning) -> Result<(), String> {
+        self.save_programme();
         self.stop_all();
         self.blocked.clear();
         self.auxiliary_failed = false;
@@ -200,15 +279,47 @@ impl Runtime {
             || !(0.0..=172800.0).contains(&plan.seconds)
             || !plan.fade.is_finite()
             || !(0.0..=30.0).contains(&plan.fade)
+            || plan
+                .bumpers
+                .as_ref()
+                .is_some_and(|b| !b.valid(plan.paths.len()) || plan.index >= b.music_count)
         {
             return Err("Invalid native playback plan".into());
         }
-        self.state.index = plan.index;
-        self.offset = plan.seconds;
+        let mut index = plan.index;
+        let mut seconds = plan.seconds;
+        self.programme = plan.bumpers.as_ref().map(|spec| {
+            let signature = spec.signature(&plan.paths, plan.fade);
+            let restored = self
+                .programmes
+                .iter()
+                .find(|old| old.context == spec.context && old.signature == signature)
+                .and_then(|old| {
+                    old.cursor.clone().seek(
+                        spec,
+                        plan.fade,
+                        old.seconds + old.anchor.elapsed().as_secs_f64(),
+                    )
+                });
+            if let Some((cursor, position)) = restored {
+                index = cursor.current;
+                seconds = position;
+                cursor
+            } else {
+                Cursor::new(spec, index, seconds)
+            }
+        });
+        self.state.index = index;
+        self.offset = seconds;
         self.plan = Some(plan);
         self.load()
     }
     fn load(&mut self) -> Result<(), String> {
+        self.state.bumper = self
+            .plan
+            .as_ref()
+            .and_then(|p| p.bumpers.as_ref())
+            .is_some_and(|b| self.state.index >= b.music_count);
         let path =
             self.plan.as_ref().ok_or("No native playback plan")?.paths[self.state.index].clone();
         self.mpv.set("pause", "yes")?;
@@ -293,6 +404,7 @@ impl Runtime {
                 self.volume()?;
             }
             Control::Stop => {
+                self.save_programme();
                 self.stop_all();
                 self.state.path.clear();
                 self.state.seconds = 0.0;
@@ -367,6 +479,9 @@ impl Runtime {
         }
     }
     fn next_index(&self) -> Option<usize> {
+        if self.programme.is_some() {
+            return self.next_programme(false).map(|c| c.current);
+        }
         let count = self.plan.as_ref()?.paths.len();
         (1..=count)
             .map(|offset| (self.state.index + offset) % count)
@@ -377,10 +492,17 @@ impl Runtime {
         loop {
             self.issue(self.state.path.clone(), error);
             self.blocked.insert(self.state.index);
-            let Some(index) = self.next_index() else {
+            let next = self.next_programme(true);
+            let index = if self.programme.is_some() {
+                next.as_ref().map(|c| c.current)
+            } else {
+                self.next_index()
+            };
+            let Some(index) = index else {
                 self.stop_all();
                 return;
             };
+            self.programme = next;
             self.state.index = index;
             self.offset = 0.0;
             match self.load() {
@@ -480,7 +602,7 @@ impl Runtime {
             return Ok(());
         };
         let plan = self.plan.as_ref().unwrap();
-        let lead = plan.fade + 3.0;
+        let lead = self.fade_between(self.state.index, index) + 3.0;
         if self.state.duration - self.state.seconds > lead {
             return Ok(());
         }
@@ -519,6 +641,14 @@ impl Runtime {
             return Ok(());
         }
         if self.fade.is_none() {
+            let requested = self
+                .auxiliary
+                .as_ref()
+                .and_then(|a| match a.role {
+                    Role::Next { index, .. } => Some(self.fade_between(self.state.index, index)),
+                    _ => None,
+                })
+                .unwrap_or(0.0);
             let Some(aux) = &mut self.auxiliary else {
                 return Ok(());
             };
@@ -532,7 +662,6 @@ impl Runtime {
             ) {
                 return Ok(());
             }
-            let requested = self.plan.as_ref().unwrap().fade;
             let next_duration = aux.mpv.number("duration").unwrap_or(0.0);
             let duration = requested
                 .min(self.state.duration / 2.0)
@@ -561,6 +690,7 @@ impl Runtime {
         Ok(())
     }
     fn handoff(&mut self) -> Result<bool, String> {
+        let next = self.next_programme(false);
         let Some(aux) = &mut self.auxiliary else {
             return Ok(false);
         };
@@ -576,6 +706,12 @@ impl Runtime {
         aux.path.clear();
         self.fade = None;
         self.state.index = index;
+        self.programme = next;
+        self.state.bumper = self
+            .plan
+            .as_ref()
+            .and_then(|p| p.bumpers.as_ref())
+            .is_some_and(|b| index >= b.music_count);
         self.state.path = self.plan.as_ref().unwrap().paths[index]
             .to_string_lossy()
             .into_owned();
@@ -599,6 +735,7 @@ impl Runtime {
             self.stop_all();
             return Ok(());
         };
+        self.programme = self.next_programme(false);
         self.state.index = index;
         self.offset = 0.0;
         self.load()
@@ -775,6 +912,7 @@ mod tests {
                 index: 0,
                 seconds: 2.6,
                 fade: 1.0,
+                bumpers: None,
             })
             .unwrap();
         until(&mut runtime, 1, |r| r.state.playing);
@@ -874,6 +1012,7 @@ mod tests {
                 index: 0,
                 seconds: 3.2,
                 fade: 0.0,
+                bumpers: None,
             })
             .unwrap();
         until(&mut runtime, 2, |r| {
@@ -898,6 +1037,7 @@ mod tests {
                 index: 0,
                 seconds: 2.8,
                 fade: 1.0,
+                bumpers: None,
             })
             .unwrap();
         until(&mut runtime, 3, |r| r.state.transitioning);
@@ -932,6 +1072,7 @@ mod tests {
                 index: 0,
                 seconds: 0.0,
                 fade: 0.0,
+                bumpers: None,
             })
             .unwrap();
         until(&mut runtime, 6, |r| !r.state.loading);
@@ -948,5 +1089,82 @@ mod tests {
         assert_eq!(gains(0.0), (1.0, 0.0));
         assert!(gains(1.0).0.abs() < 1e-12);
         assert_eq!(gains(1.0).1, 1.0);
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; exercises real music/bumper playback"]
+    fn real_bumpers_preserve_music_order_pause_volume_and_station_clock() {
+        use crate::programme::{Bumpers, Interval};
+        let library =
+            std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").expect("Set the libmpv runtime path");
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.wav");
+        let second = directory.path().join("second.wav");
+        let clip = directory.path().join("bumper.wav");
+        fixture(&first, 4.0);
+        fixture(&second, 4.0);
+        fixture(&clip, 2.0);
+        let plan = |context: &str| Plan {
+            paths: vec![first.clone(), second.clone(), clip.clone()],
+            index: 0,
+            seconds: 3.5,
+            fade: 1.0,
+            bumpers: Some(Bumpers {
+                music_count: 2,
+                lengths: vec![4.0, 4.0, 2.0],
+                interval: Interval::Songs { min: 1, max: 1 },
+                seed: 77,
+                context: context.into(),
+                revision: 0,
+            }),
+        };
+        let mut runtime = Runtime::open(library.into()).unwrap();
+        runtime.control(Control::Volume(0.0)).unwrap();
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime.load_plan(plan("station-a/all")).unwrap();
+        until(&mut runtime, 1, |r| r.state.bumper && r.state.playing);
+        assert_eq!(runtime.state.index, 2);
+        assert!(!runtime.state.transitioning, "Music overlapped the bumper");
+        assert_eq!(runtime.state.path, clip.to_string_lossy());
+        runtime.control(Control::Pause).unwrap();
+        tick_for(&mut runtime, 1, Duration::from_millis(200));
+        let position = runtime.state.seconds;
+        tick_for(&mut runtime, 1, Duration::from_millis(200));
+        assert!((runtime.state.seconds - position).abs() < 0.05);
+        runtime.control(Control::Mute).unwrap();
+        assert_eq!(runtime.mpv.number("volume"), Some(0.0));
+        runtime.control(Control::Volume(0.3)).unwrap();
+        assert!(!runtime.state.muted);
+        assert!((runtime.mpv.number("volume").unwrap() - 30.0).abs() < 0.01);
+        runtime.control(Control::Stop).unwrap();
+        assert_eq!(runtime.programmes.len(), 1);
+        tick_for(&mut runtime, 2, Duration::from_millis(250));
+        runtime.begin(2, Tuning::default()).unwrap();
+        runtime.load_plan(plan("station-a/all")).unwrap();
+        until(&mut runtime, 2, |r| r.state.playing && !r.state.loading);
+        assert!(runtime.state.bumper, "Retuning lost the scheduled bumper");
+        assert!(
+            runtime.state.seconds >= position + 0.15,
+            "Retuning restarted the bumper"
+        );
+        until(&mut runtime, 2, |r| {
+            !r.state.bumper && r.state.index == 1 && r.state.playing
+        });
+        assert!(!runtime.state.transitioning);
+        assert!(
+            runtime.state.seconds < 0.5,
+            "The next music track was interrupted or restarted incorrectly"
+        );
+        runtime.control(Control::Stop).unwrap();
+        runtime.begin(3, Tuning::default()).unwrap();
+        runtime
+            .load_plan(plan("station-a/different-group"))
+            .unwrap();
+        until(&mut runtime, 3, |r| r.state.playing && !r.state.loading);
+        assert!(
+            !runtime.state.bumper && runtime.state.index == 0,
+            "Group programme clocks were mixed"
+        );
+        runtime.control(Control::Stop).unwrap();
+        assert!(runtime.auxiliary.is_none() && !runtime.state.bumper);
     }
 }

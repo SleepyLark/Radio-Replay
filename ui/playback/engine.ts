@@ -8,6 +8,7 @@ const MAX_DECODED_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_BUFFERED_SECONDS = 600;
 
 export interface PlaybackState {
+  bumper?: boolean;
   key: string;
   station: string;
   title: string;
