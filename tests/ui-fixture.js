@@ -27,6 +27,8 @@ for (const [key, station, mode] of [
   ['archive', 'Archive 89.4', 'longset'],
 ])
   config.custom.push({ key, station, mode, tracks: [{ path: 'first.wav', name: 'First' }] });
+let playlistResult;
+contextBridge.exposeInMainWorld('__testPlaylist',value=>playlistResult=value);
 const calls = [];
 if(new URLSearchParams(location.search).has('large')) {
   config.custom=[{key:'large',station:'Large Library',mode:'tracks',tracks:Array.from({length:20000},(_,i)=>({path:`C:/Fixture/Album ${Math.floor(i/1000)}/track-${i}.mp3`,name:`Track ${i}`}))}];
@@ -146,6 +148,9 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         };
       case 'remember_duration':
         return null;
+      case 'choose_playlist':
+        if(playlistResult==='error')throw new Error('Fixture invalid playlist');
+        return playlistResult===undefined?{name:'Imported playlist',tracks:[{path:'first.wav',name:'First'},{path:'playlist-two.wav',name:'Playlist Two'},{path:'playlist-three.wav',name:'Playlist Three'}],issues:[{line:6,entry:'https://example.invalid/live',reason:'Network streams are not supported in local playlist imports'}],issueCount:1}:playlistResult;
       case 'choose_bumper_folder':
         return 'C:\\Radio\\Bumpers';
       case 'save_station': {

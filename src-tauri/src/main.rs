@@ -265,6 +265,37 @@ async fn choose_audio(
 }
 
 #[tauri::command]
+async fn choose_playlist(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Option<radio_replay_core::m3u::Import>, String> {
+    if window.label() != "main" {
+        return Err("Main player required".into());
+    }
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("Local playlists", &["m3u", "m3u8"])
+        .blocking_pick_file();
+    let Some(file) = selected else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = radio_replay_core::m3u::import(&path)?;
+        let library = app.state::<Library>();
+        library
+            .1
+            .lock()
+            .map_err(|e| e.to_string())?
+            .extend(report.tracks.iter().map(|t| t.path.clone()));
+        Ok(Some(report))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn choose_bumper_folder(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -491,6 +522,7 @@ fn main() {
                 load_config,
                 import_config,
                 choose_audio,
+                choose_playlist,
                 choose_bumper_folder,
                 choose_artwork,
                 prepare_station,

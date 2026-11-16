@@ -12,6 +12,6 @@
 <div id="fileList" class="editor-tracks" tabindex="0" role="region" aria-label="Audio files grouped by folder">
   {#each folders.slice(0,folderLimit) as [folder,items],index (folder)}
     <TrackFolder {folder} {items} {reorder} previous={neighbor(index,-1)} next={neighbor(index,1)} total={tracks.length} initialOpen={index===0} {onmove} {onmovefolder} {onremove}/>
-  {:else}<div class="file-drop-zone">Drop audio files or folders here, or use Add files / Add folder.</div>{/each}
+  {:else}<div class="file-drop-zone">Drop audio files or folders here, or use Add files / Add folder / Import playlist.</div>{/each}
   {#if folders.length>folderLimit}<button type="button" class="folder-more" onclick={()=>folderLimit+=50}>Show {Math.min(50,folders.length-folderLimit)} more folders</button>{/if}
 </div>

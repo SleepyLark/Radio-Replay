@@ -38,6 +38,7 @@ This development fork adds optional between-song clips with song-count or
 listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md).
 
 - Create stations from files, folders, or audio dropped into the app.
+- Import local M3U/M3U8 playlists through the station editor; see the [playlist import guide](docs/local-playlists.md).
 - Shuffle songs as a **Music station**, or play recordings in order as a **Radio broadcast**.
 - Keep station timelines moving while listening elsewhere, without playing hidden audio.
 - Organize whole stations or individual music tracks into groups.
@@ -48,7 +49,7 @@ listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md
 - Cache metadata and durations in SQLite for reuse across launches.
 - Inspect problematic files through dismissible notifications.
 
-Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. Network streams and M3U playlists are not enabled yet.
+Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. Local M3U/M3U8 playlist imports are supported. Network streams and network playlists are not enabled yet.
 
 ## Getting started
 

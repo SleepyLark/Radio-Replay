@@ -89,6 +89,8 @@ export interface StationEdit {
   options?: Record<string, unknown>;
 }
 export const chooseAudio = (folder: boolean) => invoke<Track[]>('choose_audio', { folder });
+export interface PlaylistImport {name:string;tracks:Track[];issues:{line:number;entry:string;reason:string}[];issueCount:number;}
+export const choosePlaylist = () => invoke<PlaylistImport|null>('choose_playlist');
 export const chooseBumperFolder = () => invoke<string|null>('choose_bumper_folder');
 export const chooseArtwork = () => invoke<string | null>('choose_artwork');
 export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });

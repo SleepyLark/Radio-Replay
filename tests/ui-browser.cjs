@@ -261,6 +261,42 @@ const server = http.createServer((req, res) => {
       await page.evaluate(
         `[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='Cancel').click()`,
       );
+      await page.exposeFunction('__capturePlaylistReport',async()=>fs.writeFileSync(path.join(output,'ui-playlist-import.png'),await page.screenshot()));
+      console.log(await page.evaluate(async()=>{
+        const wait=ms=>new Promise(r=>setTimeout(r,ms));
+        const until=async(test,message)=>{for(let i=0;i<100;i++){if(test())return;await wait(30);}throw Error(message);};
+        const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
+        const assert=(ok,message)=>{if(!ok)throw Error(message);};
+        await wait(50);
+        const original=JSON.stringify(window.__testConfig().custom);
+        button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Playlist editor missing');
+        button('Import playlist').click();await until(()=>document.querySelector('.playlist-report'),'Playlist result missing');
+        assert(document.querySelector('.playlist-report').textContent.includes('2 files added'),'Playlist existing-file deduplication failed');
+        assert(document.querySelector('.playlist-report').textContent.includes('1 already in this station'),'Existing-file notice missing');
+        assert(document.querySelector('.playlist-report code').textContent==='https://example.invalid/live','Playlist skipped-entry detail missing');
+        document.querySelector('.playlist-report details').open=true;
+        document.querySelector('.playlist-report').scrollIntoView({block:'center'});
+        await window.__capturePlaylistReport();
+        assert(document.querySelector('[aria-pressed="true"]').textContent==='Music station','Import unexpectedly changed playback mode');
+        button('Cancel').click();await until(()=>!document.querySelector('dialog'),'Cancel failed');await wait(50);
+        assert(JSON.stringify(window.__testConfig().custom)===original,'Cancelled playlist import changed the library');
+        button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Editor reopen failed');
+        window.__testPlaylist(null);button('Import playlist').click();await wait(70);
+        assert(!document.querySelector('.playlist-report'),'Cancelling picker changed station');
+        window.__testPlaylist('error');button('Import playlist').click();await until(()=>document.querySelector('dialog [role="alert"]'),'Playlist error missing');
+        window.__testPlaylist({name:'Empty',tracks:[],issues:[{line:1,entry:'missing.mp3',reason:'File not found'}],issueCount:1});
+        button('Import playlist').click();await until(()=>document.querySelector('.playlist-report')?.textContent.includes('0 files added'),'Empty import summary missing');
+        window.__testPlaylist(undefined);button('Import playlist').click();await until(()=>document.querySelector('.playlist-report')?.textContent.includes('2 files added'),'Playlist retry failed');
+        button('Dismiss import report').click();await until(()=>!document.querySelector('.playlist-report'),'Playlist report not dismissible');
+        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Imported playlist save failed');
+        const saved=window.__testConfig().custom.find(s=>s.station==='Fixture Radio Live');
+        assert(saved.tracks.at(-2).name==='Playlist Two'&&saved.tracks.at(-1).name==='Playlist Three','Imported order or titles not saved');
+        await wait(50);button('＋ CREATE STATION').click();await until(()=>document.querySelector('dialog')?.open,'New playlist station editor missing');
+        button('Import playlist').click();await until(()=>document.querySelector('.playlist-report'),'New station playlist missing');
+        assert(document.querySelector('dialog input').value==='Imported playlist','New station did not inherit playlist name');
+        button('Cancel').click();await until(()=>!document.querySelector('dialog'),'New station cancel failed');
+        return 'Local playlist UI passed: import, preserved mode/order, duplicates, skipped entries, cancel, error, retry, dismissal and save.';
+      }));
       await page.setViewportSize({width:760,height:560});
       await new Promise((r) => setTimeout(r, 100));
       console.log(

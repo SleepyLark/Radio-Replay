@@ -6,7 +6,7 @@
   import {moveFolder} from './playlist';
   import {sampleBanner} from './appearance';
   import {fadeSeconds} from './playback/timeline';
-  import {chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
+  import {choosePlaylist, type PlaylistImport, chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
   let {station,logo,settings,incoming,onsaved,oncancel}: {station:Station|null; logo:unknown; settings:Record<string,unknown>; incoming:Track[]; onsaved:(config:Config)=>void; oncancel:()=>void}=$props();
   const initial=untrack(()=>({station,logo,settings}));
   const key=initial.station?.key??crypto.randomUUID();
@@ -21,6 +21,7 @@
   let textMode=$state(['titles','lyrics','ignore'].includes(String(initial.station?.textMode))?String(initial.station?.textMode):'auto');
   let customFade=$state(initial.station?.crossfade!=null), fade=$state(initial.station?fadeSeconds(initial.station,initial.settings)*1000:5000);
   let busy=$state(false), error=$state(''), confirmDelete=$state(false);
+  let playlistReport=$state<PlaylistImport|null>(null), playlistAdded=$state(0), playlistDuplicates=$state(0);
   const originalBumpers=untrack(()=>station?.bumpers);
   let bumperEnabled=$state(originalBumpers?.enabled===true), bumperFolder=$state(originalBumpers?.folder??'');
   let bumperMethod=$state<'songs'|'time'>(originalBumpers?.method==='time'?'time':'songs');
@@ -33,6 +34,12 @@
   $effect(()=>{const picked=incoming;if(picked===lastIncoming)return;lastIncoming=picked;if(picked.length)untrack(()=>merge(picked));});
   async function perform(action:()=>Promise<void>){busy=true;error='';try{await action();}catch(e){error=String(e);}finally{busy=false;}}
   async function add(folder:boolean){await perform(async()=>merge(await chooseAudio(folder)));}
+  async function importPlaylist(){await perform(async()=>{
+    const report=await choosePlaylist();if(!report)return;
+    const previous=tracks.length;merge(report.tracks);
+    playlistAdded=tracks.length-previous;playlistDuplicates=report.tracks.length-playlistAdded;playlistReport=report;
+    if(!name.trim())name=report.name;
+  });}
   function move(index:number,direction:number){const next=[...tracks];[next[index],next[index+direction]]=[next[index+direction],next[index]];tracks=next;}
   function removeTracks(paths:string[]){const removed=new Set(paths);tracks=tracks.filter(track=>!removed.has(track.path));}
   function reorderFolder(folder:string,target:string|undefined,position:'before'|'after'|'first'){tracks=moveFolder(tracks,folder,target,position);}
@@ -47,7 +54,11 @@
       <label>Station name<input required maxlength="200" bind:value={name} placeholder="Your station name"/></label>
       <p>Playback style</p><div class="preset-actions"><button type="button" aria-pressed={mode==='tracks'} onclick={()=>mode='tracks'}>Music station</button><button type="button" aria-pressed={mode==='longset'} onclick={()=>mode='longset'}>Radio broadcast</button></div>
       <p id="playbackHelp">{mode==='tracks'?'Files play in a shuffled order. Timestamps supply lyrics by default.':'Recordings play in order. Timestamps supply track titles by default.'}</p>
-      <div class="file-actions"><button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button></div>
+      <div class="file-actions"><button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button><button type="button" onclick={importPlaylist}>Import playlist</button></div>
+      <p>Import local .m3u / .m3u8 files. Music stations shuffle; Radio broadcasts follow the imported order.</p>
+      {#if playlistReport}<div class="playlist-report" role="status"><p>{playlistAdded} file{playlistAdded===1?'':'s'} added from “{playlistReport.name}”.{#if playlistDuplicates}{' '}{playlistDuplicates} already in this station.{/if}</p>
+        {#if playlistReport.issueCount}<details><summary>{playlistReport.issueCount} import notice{playlistReport.issueCount===1?'':'s'} — view details</summary><ul>{#each playlistReport.issues as issue}<li>{#if issue.line}Line {issue.line}:{' '}{/if}<code>{issue.entry}</code> — {issue.reason}</li>{/each}</ul>{#if playlistReport.issueCount>playlistReport.issues.length}<p>Showing the first {playlistReport.issues.length} notices.</p>{/if}</details>{/if}
+        <button type="button" onclick={()=>playlistReport=null}>Dismiss import report</button></div>{/if}
       <p>{tracks.length} file{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
       <FileList {tracks} reorder={mode==='longset'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
     </details>
@@ -77,3 +88,9 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}{#if busy}<p role="status">Working…</p>{/if}
   {#snippet footer()}<button type="button" disabled={busy} onclick={oncancel}>Cancel</button><button type="submit" class="primary" disabled={busy||!name.trim()||!tracks.length||invalidBumpers}>Save station</button>{/snippet}
 </Dialog>
+
+<style>
+  .playlist-report{border:1px solid var(--line,#365347);padding:12px;margin-block:12px;overflow-wrap:anywhere}
+  .playlist-report ul{max-height:180px;overflow:auto;padding-left:22px}
+  .playlist-report li{margin-block:8px}
+</style>

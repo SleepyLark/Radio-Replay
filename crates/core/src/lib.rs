@@ -2,6 +2,7 @@
 pub mod bumpers;
 pub mod desktop;
 pub mod library;
+pub mod m3u;
 pub mod metadata;
 pub mod preferences;
 use serde::{Deserialize, Serialize};
