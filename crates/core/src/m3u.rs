@@ -232,7 +232,7 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
                     .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
         }) {
             if !scheme.eq_ignore_ascii_case("file") {
-                return Err("Network streams and other URL schemes are not supported in local playlist imports".into());
+                return Err("Unsupported playlist URL scheme; only local files and direct HTTP(S) audio are supported".into());
             }
             let url = url::Url::parse(entry).map_err(|_| "Invalid file URL")?;
             if url.query().is_some() || url.fragment().is_some() {
@@ -535,7 +535,18 @@ mod tests {
         let report = import(Path::new(&file)).unwrap();
         assert!(report.network);
         assert!(report.tracks.len() > 1);
-        assert_eq!(report.issue_count, 0);
+        println!("Import notices: {}", report.issue_count);
+        for issue in &report.issues {
+            println!("Line {}: {}", issue.line, issue.reason);
+        }
+        let expected = std::env::var("RADIO_REPLAY_M3U_TEST_NOTICES")
+            .ok()
+            .map(|s| {
+                s.parse::<usize>()
+                    .expect("Expected notice count must be a number")
+            })
+            .unwrap_or(0);
+        assert_eq!(report.issue_count, expected);
         println!(
             "Imported {} network song entries without fetching audio",
             report.tracks.len()

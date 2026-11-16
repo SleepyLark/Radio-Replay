@@ -112,7 +112,7 @@ export class NativePlayback {
       for(const problem of prepared.problems)this.problems.set(`${problem.kind}:${problem.path}`,problem);
       if(station.mode==='network'){
         if(!prepared.tracks.length)throw new Error('No playable streams in this station.');
-        this.order=prepared.tracks;this.notice('');
+        this.order=shuffle(prepared.tracks,this.random);this.notice('');
         const loaded=await this.rpc<NativeSnapshot>('native_load',{generation:this.generation,key:station.key,paths:this.order.map(t=>t.path),index:0,seconds:0,fade:0,bumperCount:0});
         if(token===this.token&&!this.disposed)this.apply(loaded);return;
       }

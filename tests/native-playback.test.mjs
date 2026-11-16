@@ -5,7 +5,7 @@ import {NativePlayback} from '../ui/playback/native.ts';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const station=key=>({key,station:key,mode:'longset',tracks:[],crossfade:0});
 const track=path=>({path,name:path,size:100,modified:1,duration:10});
-function setup(prepare=async key=>({tracks:[track(`${key}-a`),track(`${key}-b`)],problems:[]})) {
+function setup(prepare=async key=>({tracks:[track(`${key}-a`),track(`${key}-b`)],problems:[]}),random=()=>0) {
   let event;
   let state={generation:0,sequence:0,index:0,path:'',seconds:0,duration:0,playing:false,loading:false,volume:.8,muted:false,error:'',errorPath:'',issueRevision:0};
   const calls=[];
@@ -29,7 +29,7 @@ function setup(prepare=async key=>({tracks:[track(`${key}-a`),track(`${key}-b`)]
     state={...state,sequence:state.sequence+1};
     return state;
   };
-  const player=new NativePlayback({onState(){},invoke:rpc,listen:async callback=>{event=callback;return ()=>{};},now:()=>0,random:()=>0});
+  const player=new NativePlayback({onState(){},invoke:rpc,listen:async callback=>{event=callback;return ()=>{};},now:()=>0,random});
   return {player,calls,emit:patch=>{state={...state,...patch,sequence:state.sequence+1};event(state);},snapshot:()=>state};
 }
 
@@ -125,14 +125,30 @@ test('continuous broadcasts never load a bumper catalogue',async()=>{
   }finally{player.dispose();}
 });
 
-test('network stations start at the first URL without probing, virtual seeking, fades or duration writes',async()=>{
+test('network stations shuffle URLs without probing, virtual seeking, fades or duration writes',async()=>{
   const urls=['https://radio.example.org/song.mp3','https://radio.example.org/live'];
   const {player,calls,emit}=setup(async()=>({tracks:urls.map(path=>({...track(path),duration:null,source:'network'})),problems:[]}));
   try{
     await player.tune({...station('radio'),mode:'network',crossfade:5000});
     const plan=calls.find(c=>c.command==='native_load').args;
-    assert.deepEqual(plan.paths,urls);assert.equal(plan.index,0);assert.equal(plan.seconds,0);assert.equal(plan.fade,0);assert.equal(plan.bumperCount,0);
-    assert.equal(player.state.network,true);emit({index:1,path:urls[1],duration:0,seconds:5,playing:true});assert.equal(player.state.path,urls[1]);
+    assert.deepEqual(plan.paths,[...urls].reverse());assert.equal(plan.index,0);assert.equal(plan.seconds,0);assert.equal(plan.fade,0);assert.equal(plan.bumperCount,0);
+    assert.equal(player.state.network,true);emit({index:1,path:plan.paths[1],duration:0,seconds:5,playing:true});assert.equal(player.state.path,plan.paths[1]);assert.equal(player.state.title,plan.paths[1]);
     assert.equal(calls.filter(c=>c.command==='remember_duration').length,0);
+  }finally{player.dispose();}
+});
+
+test('network retuning draws a fresh order without modifying the saved playlist',async()=>{
+  const tracks=['https://radio.example.org/a','https://radio.example.org/b','https://radio.example.org/c'].map(path=>({...track(path),duration:null}));
+  const original=structuredClone(tracks);let random=0;
+  const {player,calls}=setup(async()=>({tracks,problems:[]}),()=>random);
+  try{
+    const radio={...station('radio'),mode:'network'};
+    await player.tune(radio,{tuningTransition:false});
+    random=.999;
+    await player.tune(radio,{tuningTransition:false});
+    const plans=calls.filter(c=>c.command==='native_load').map(c=>c.args);
+    assert.equal(plans.length,2);assert.notDeepEqual(plans[0].paths,plans[1].paths);
+    for(const plan of plans){assert.deepEqual(new Set(plan.paths),new Set(tracks.map(t=>t.path)));assert.equal(plan.index,0);assert.equal(plan.seconds,0);}
+    assert.deepEqual(tracks,original);
   }finally{player.dispose();}
 });

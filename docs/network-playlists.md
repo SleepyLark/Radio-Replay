@@ -14,10 +14,14 @@ npm run desktop
 
 Create a station, choose **Import playlist**, and select a local M3U/M3U8 containing
 HTTP(S) audio URLs. The editor selects **Network station** for an empty station.
-Review the import and save. Importing/preparing does not connect to the stream
+Review the import and save. A playlist remains one station, including playlists
+with multiple live feeds or alternative relays. Reopening an already-playing
+station preserves its current feed; tuning away and back creates a new shuffle.
+Importing/preparing does not connect to the stream
 hosts. Connecting begins when you tune in; importing is not a background scan.
 
-Finite audio URLs play in playlist order and advance at EOF. A live URL plays
+Network entries are shuffled into a fresh order on each tune. Finite audio URLs
+advance through that order at EOF. A live URL plays
 until you stop, retune, or its connection ends. Pause/resume and volume/mute use
 the same native player. Unknown total duration is shown as **STREAM** in the main
 and mini players. Playlist `#EXTINF` names supply titles; duration estimates are
