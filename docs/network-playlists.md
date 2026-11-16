@@ -38,6 +38,22 @@ https://nonstopcasiopea.radioca.st/;
 The supplied `ggs.m3u` imported all 132 entries without fetching audio. Both its
 first MP3 and the Casiopea live feed were tested through native playback.
 
+## Manually entered links
+
+Select **Network station** in the station editor to add a direct HTTP(S) audio URL.
+An optional name labels the entry; without one, the server hostname is used.
+Add multiple links or combine them with entries imported from a local M3U/M3U8
+file. Network-mode imports skip local/non-HTTP(S) entries and report them rather
+than adding local files. Remove individual links from the list; this does not
+change the original playlist file. Duplicate URLs are not added, and each network
+station is limited to 1,000 links. Changes are committed with **Save station**.
+
+Adding a URL uses the same Rust URL policy as playlist imports and does not make
+a connection. Public DNS validation, pinned connections and redirect checks run
+when playback opens the link. The field accepts audio endpoints, not webpage or
+remote playlist URLs. Direct links to finite songs and continuous feeds share
+the existing shuffle-on-tune behavior.
+
 ## Supported in this phase
 
 - Direct HTTP/HTTPS audio endpoints, including endpoints without extensions.
@@ -54,7 +70,7 @@ first MP3 and the Casiopea live feed were tested through native playback.
 
 Keep local audio and network URLs in separate stations. Mixed playlists are
 rejected with an explanation. HLS/DASH, nested/remote playlist fetching, webpage
-extraction, interleaved ICY metadata, authentication, direct URL input, and
+extraction, interleaved ICY metadata, authentication, and
 private/LAN radio servers are not implemented. The existing Web Audio comparison
 build explicitly rejects network stations; use the default libmpv build.
 

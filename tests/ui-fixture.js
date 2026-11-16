@@ -150,7 +150,13 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         };
       case 'remember_duration':
         return null;
+      case 'add_network_stream': {
+        const url=new URL(args.url.trim());
+        if(!['http:','https:'].includes(url.protocol)||url.hostname==='127.0.0.1')throw new Error('Fixture blocked URL');
+        return {path:url.href,name:args.name.trim()||url.hostname,source:'network'};
+      }
       case 'choose_playlist':
+        window.__lastPlaylistNetworkOnly=args.networkOnly;
         if(playlistResult==='error')throw new Error('Fixture invalid playlist');
         return playlistResult===undefined?{name:'Imported playlist',tracks:[{path:'first.wav',name:'First'},{path:'playlist-two.wav',name:'Playlist Two'},{path:'playlist-three.wav',name:'Playlist Three'}],issues:[{line:6,entry:'https://example.invalid/live',reason:'Network streams are not supported in local playlist imports'}],issueCount:1}:playlistResult;
       case 'choose_bumper_folder':
@@ -168,6 +174,7 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
             ? { ...s, ...edit.options, station: edit.name, mode: edit.mode, tracks: edit.tracks }
             : s,
         );
+        if(!config.custom.some(s=>s.key===edit.key))config.custom.push({key:edit.key,station:edit.name,mode:edit.mode,tracks:edit.tracks,...edit.options});
         config.logos[edit.key] = edit.logoPath;
         return structuredClone(config);
       }

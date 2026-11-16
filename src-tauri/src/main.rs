@@ -274,7 +274,27 @@ async fn choose_audio(
 }
 
 #[tauri::command]
+fn add_network_stream(
+    window: tauri::WebviewWindow,
+    library: State<'_, Library>,
+    url: String,
+    name: String,
+) -> Result<Track, String> {
+    if window.label() != "main" {
+        return Err("Main player required".into());
+    }
+    let track = radio_replay_core::m3u::network_track(&url, &name)?;
+    library
+        .1
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(track.path.clone());
+    Ok(track)
+}
+
+#[tauri::command]
 async fn choose_playlist(
+    network_only: Option<bool>,
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<Option<radio_replay_core::m3u::Import>, String> {
@@ -284,14 +304,18 @@ async fn choose_playlist(
     let selected = app
         .dialog()
         .file()
-        .add_filter("Local playlists", &["m3u", "m3u8"])
+        .add_filter("M3U playlists", &["m3u", "m3u8"])
         .blocking_pick_file();
     let Some(file) = selected else {
         return Ok(None);
     };
     let path = file.into_path().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let report = radio_replay_core::m3u::import(&path)?;
+        let report = if network_only.unwrap_or(false) {
+            radio_replay_core::m3u::import_network(&path)?
+        } else {
+            radio_replay_core::m3u::import(&path)?
+        };
         let library = app.state::<Library>();
         library
             .1
@@ -555,6 +579,7 @@ fn main() {
                 import_config,
                 choose_audio,
                 choose_playlist,
+                add_network_stream,
                 choose_bumper_folder,
                 choose_artwork,
                 prepare_station,

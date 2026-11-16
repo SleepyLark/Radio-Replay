@@ -6,7 +6,7 @@
   import {moveFolder} from './playlist';
   import {sampleBanner} from './appearance';
   import {fadeSeconds} from './playback/timeline';
-  import {choosePlaylist, type PlaylistImport, chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
+  import {addNetworkStream, choosePlaylist, type PlaylistImport, chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
   let {station,logo,settings,incoming,onsaved,oncancel}: {station:Station|null; logo:unknown; settings:Record<string,unknown>; incoming:Track[]; onsaved:(config:Config)=>void; oncancel:()=>void}=$props();
   const initial=untrack(()=>({station,logo,settings}));
   const key=initial.station?.key??crypto.randomUUID();
@@ -20,6 +20,7 @@
   let spinLogo=$state(initial.station?.spinLogo===true);
   let textMode=$state(['titles','lyrics','ignore'].includes(String(initial.station?.textMode))?String(initial.station?.textMode):'auto');
   let customFade=$state(initial.station?.crossfade!=null), fade=$state(initial.station?fadeSeconds(initial.station,initial.settings)*1000:5000);
+  let streamUrl=$state(''), streamName=$state('');
   let busy=$state(false), error=$state(''), confirmDelete=$state(false);
   let playlistReport=$state<PlaylistImport|null>(null), playlistAdded=$state(0), playlistDuplicates=$state(0);
   const originalBumpers=untrack(()=>station?.bumpers);
@@ -32,13 +33,20 @@
   const preview=$derived({key,station:name,mode,tracks,bannerPath,bannerColor:useColor?bannerColor:'',spinLogo});
   let lastIncoming:Track[]|undefined;
   function merge(picked:Track[]){const paths=new Set(tracks.map(t=>t.path));tracks=[...tracks,...picked.filter(t=>{if(paths.has(t.path))return false;paths.add(t.path);return true;})];}
-  $effect(()=>{const picked=incoming;if(picked===lastIncoming)return;lastIncoming=picked;if(picked.length)untrack(()=>merge(picked));});
+  $effect(()=>{const picked=incoming;if(picked===lastIncoming)return;lastIncoming=picked;if(picked.length)untrack(()=>{if(mode==='network')error='Local audio drops are not supported in network stations.';else merge(picked);});});
   async function perform(action:()=>Promise<void>){busy=true;error='';try{await action();}catch(e){error=String(e);}finally{busy=false;}}
   async function add(folder:boolean){await perform(async()=>merge(await chooseAudio(folder)));}
+  async function addStream(){await perform(async()=>{
+    if(tracks.length>=1000)throw new Error('Network stations are limited to 1,000 streams.');
+    const track=await addNetworkStream(streamUrl,streamName);
+    if(tracks.some(t=>t.path===track.path))throw new Error('This link is already in the station.');
+    merge([track]);streamUrl='';streamName='';
+  });}
   async function importPlaylist(){await perform(async()=>{
-    const report=await choosePlaylist();if(!report)return;
+    const report=await choosePlaylist(mode==='network');if(!report)return;
     if(report.tracks.length&&tracks.length&&(mode==='network')!==(report.network===true))throw new Error('Local files and network streams need separate stations.');
-    if(report.tracks.length&&!tracks.length)mode=report.network?'network':mode==='network'?'tracks':mode;
+    if(report.tracks.length&&!tracks.length)mode=report.network?'network':mode;
+    if(mode==='network'&&new Set([...tracks,...report.tracks].map(t=>t.path)).size>1000)throw new Error('Network stations are limited to 1,000 streams.');
     const previous=tracks.length;merge(report.tracks);
     playlistAdded=tracks.length-previous;playlistDuplicates=report.tracks.length-playlistAdded;playlistReport=report;
     if(!name.trim())name=report.name;
@@ -57,14 +65,19 @@
       <label>Station name<input required maxlength="200" bind:value={name} placeholder="Your station name"/></label>
       <p>Playback style</p><div class="preset-actions"><button type="button" aria-pressed={mode==='tracks'} onclick={()=>mode='tracks'}>Music station</button><button type="button" aria-pressed={mode==='longset'} onclick={()=>mode='longset'}>Radio broadcast</button><button type="button" aria-pressed={mode==='network'} onclick={()=>mode='network'}>Network station</button></div>
       <p id="playbackHelp">{mode==='network'?'HTTP(S) entries are shuffled each time you tune in. A live feed stays selected until it ends or you tune away. Private-network addresses, nested playlists and HLS are blocked.':mode==='tracks'?'Files play in a shuffled order. Timestamps supply lyrics by default.':'Recordings play in order. Timestamps supply track titles by default.'}</p>
+      {#if mode==='network'}
+      <label>Stream URL<input type="text" inputmode="url" maxlength="8192" bind:value={streamUrl} placeholder="https://radio.example.org/stream" onkeydown={event=>{if(event.key==='Enter'){event.preventDefault();if(streamUrl.trim())void addStream();}}}/></label>
+      <label>Stream name (optional)<input maxlength="200" bind:value={streamName} placeholder="Defaults to the server name"/></label>
+      <button type="button" disabled={!streamUrl.trim()||tracks.length>=1000} onclick={addStream}>Add link</button>
+      {/if}
       <div class="file-actions">{#if mode!=='network'}<button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button>{/if}<button type="button" onclick={importPlaylist}>Import playlist</button></div>
-      <p>Import an .m3u / .m3u8 playlist of local files or HTTP(S) streams. Music stations shuffle; network stations reshuffle on each tune; Radio broadcasts follow playlist order.</p>
+      <p>{mode==='network'?'Add direct HTTP(S) audio links, including individual songs or continuous radio feeds. Import playlist accepts network entries only; local entries are skipped with a notice. Links are shuffled each time you tune in.':'Import an .m3u / .m3u8 playlist of local files or HTTP(S) streams. Music stations shuffle; Radio broadcasts follow playlist order.'}</p>
       {#if playlistReport}<div class="playlist-report" role="status"><p>{playlistAdded} file{playlistAdded===1?'':'s'} added from “{playlistReport.name}”.{#if playlistDuplicates}{' '}{playlistDuplicates} already in this station.{/if}</p>
         {#if playlistReport.issueCount}<details><summary>{playlistReport.issueCount} import notice{playlistReport.issueCount===1?'':'s'} — view details</summary><ul>{#each playlistReport.issues as issue}<li>{#if issue.line}Line {issue.line}:{' '}{/if}<code>{issue.entry}</code> — {issue.reason}</li>{/each}</ul>{#if playlistReport.issueCount>playlistReport.issues.length}<p>Showing the first {playlistReport.issues.length} notices.</p>{/if}</details>{/if}
         <button type="button" onclick={()=>playlistReport=null}>Dismiss import report</button></div>{/if}
       {#if invalidSources}<p role="status">Network entries require Network station playback. Keep local files in a separate station.</p>{/if}
-      <p>{tracks.length} file{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
-      <FileList {tracks} reorder={mode!=='tracks'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
+      <p>{tracks.length} {mode==='network'?'link':'file'}{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
+      <FileList {tracks} network={mode==='network'} reorder={mode==='longset'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
     </details>
     {#if mode==='tracks'}
     <details class="editor-section" open={bumperEnabled}><summary>Bumpers</summary>

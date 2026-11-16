@@ -261,6 +261,7 @@ const server = http.createServer((req, res) => {
       await page.evaluate(
         `[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='Cancel').click()`,
       );
+      await page.exposeFunction('__captureNetworkEditor',async()=>fs.writeFileSync(path.join(output,'ui-network-editor.png'),await page.screenshot()));
       await page.exposeFunction('__capturePlaylistReport',async()=>fs.writeFileSync(path.join(output,'ui-playlist-import.png'),await page.screenshot()));
       console.log(await page.evaluate(async()=>{
         const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -303,10 +304,32 @@ const server = http.createServer((req, res) => {
         assert(!button('Add files')&&!button('Add folder'),'Network station offers local file mixing');
         assert(![...document.querySelectorAll('dialog summary')].some(s=>s.textContent==='Bumpers'||s.textContent==='Advanced'),'Network station offers unsupported local-only controls');
         assert(!button('Save station').disabled,'Valid network station cannot be saved');
+        const url=document.querySelector('input[placeholder="https://radio.example.org/stream"]');
+        const label=document.querySelector('input[placeholder="Defaults to the server name"]');
+        const input=(el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));};
+        input(url,'https://radio.example.org/manual.mp3');input(label,'Manual song');await wait(20);button('Add link').click();
+        await until(()=>document.querySelector('#fileList').textContent.includes('Manual song'),'Manual link not added');
+        assert(!url.value&&!label.value,'Added link fields not cleared');
+        input(url,'https://radio.example.org/manual.mp3');await wait(20);button('Add link').click();
+        await until(()=>document.querySelector('dialog [role="alert"]')?.textContent.includes('already'),'Duplicate not reported');
+        input(url,'http://127.0.0.1/live');await wait(20);button('Add link').click();
+        await until(()=>document.querySelector('dialog [role="alert"]')?.textContent.includes('blocked'),'Unsafe link not rejected');
+        assert(url.value==='http://127.0.0.1/live','Rejected URL not retained for correction');
+        document.querySelector('[aria-label="Remove Manual song"]').click();await wait(20);
+        assert(!document.querySelector('#fileList').textContent.includes('manual.mp3'),'Manual link removal failed');
+        button('Import playlist').click();await wait(30);
+        assert(window.__lastPlaylistNetworkOnly===true,'Network-only picker was not requested');
         button('Music station').click();await wait(20);assert(button('Save station').disabled,'Network URLs allowed in local playback mode');
-        button('Network station').click();await wait(20);button('Cancel').click();await until(()=>!document.querySelector('dialog'),'Network cancel failed');
+        button('Network station').click();await wait(20);
+        const urlAgain=document.querySelector('input[placeholder="https://radio.example.org/stream"]');
+        input(urlAgain,'https://radio.example.org/saved.mp3');await wait(20);button('Add link').click();
+        await until(()=>document.querySelector('#fileList').textContent.includes('saved.mp3'),'Second manual link not added');
+        urlAgain.scrollIntoView({block:'start'});await wait(30);await window.__captureNetworkEditor();
+        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Manual network station save failed');
+        const network=window.__testConfig().custom.find(s=>s.station==='Network fixture');
+        assert(network.mode==='network'&&network.tracks.length===3&&network.tracks.some(t=>t.path==='https://radio.example.org/saved.mp3'),'Manual links not persisted alongside playlist');
         window.__testPlaylist(undefined);
-        return 'Local playlist UI passed: import, preserved mode/order, duplicates, skipped entries, cancel, error, retry, dismissal and save.';
+        return 'Network editor and local playlist UI passed: import, preserved mode/order, duplicates, skipped entries, cancel, error, retry, dismissal and save.';
       }));
       const problemsPage=await browser.newPage({viewport:{width:1200,height:800}});
       await problemsPage.addInitScript({path:path.join(__dirname,'ui-fixture.js')});

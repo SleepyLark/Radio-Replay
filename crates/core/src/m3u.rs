@@ -43,7 +43,25 @@ pub fn playlist_file(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .is_some_and(|s| s.eq_ignore_ascii_case("m3u") || s.eq_ignore_ascii_case("m3u8"))
 }
+pub fn network_track(value: &str, name: &str) -> Result<Track, String> {
+    let url = radio_replay_network::validate(value.trim())?;
+    Ok(Track {
+        name: if name.trim().is_empty() {
+            url.host_str().unwrap_or("Network stream").to_owned()
+        } else {
+            name.trim().chars().take(200).collect()
+        },
+        path: url.to_string(),
+        extra: serde_json::from_value(serde_json::json!({"source":"network"})).unwrap(),
+    })
+}
 pub fn import(path: &Path) -> Result<Import, String> {
+    import_filtered(path, false)
+}
+pub fn import_network(path: &Path) -> Result<Import, String> {
+    import_filtered(path, true)
+}
+fn import_filtered(path: &Path, network_only: bool) -> Result<Import, String> {
     if !playlist_file(path) {
         return Err("Choose an .m3u or .m3u8 playlist".into());
     }
@@ -99,7 +117,9 @@ pub fn import(path: &Path) -> Result<Import, String> {
     };
     // HLS is also named M3U8, but its local segment files are not standalone songs.
     if text.lines().any(|line| line.trim().starts_with("#EXT-X-")) {
-        return Err("This is an HLS stream playlist. This importer currently supports local audio playlists only.".into());
+        return Err(
+            "This is an HLS stream playlist. Use a playlist of direct audio URLs instead.".into(),
+        );
     }
     let base = path.parent().ok_or("Playlist has no parent folder")?;
     let mut title: Option<String> = None;
@@ -139,6 +159,14 @@ pub fn import(path: &Path) -> Result<Import, String> {
             || entry
                 .get(..8)
                 .is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+        if network_only && !web {
+            report.issue(
+                line,
+                entry,
+                "Skipped non-HTTP(S) entry: network stations accept network streams only",
+            );
+            continue;
+        }
         let result = if web {
             radio_replay_network::validate(entry).map(|url| Track {
                 path: url.to_string(),
@@ -275,6 +303,66 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn manual_links_use_network_policy_without_connecting() {
+        let track = network_track(" https://radio.example.org:443/live ", " My Radio ").unwrap();
+        assert_eq!(track.path, "https://radio.example.org/live");
+        assert_eq!(track.name, "My Radio");
+        assert_eq!(track.extra.get("source").unwrap(), "network");
+        assert_eq!(
+            network_track("https://radio.example.org/song.mp3", "")
+                .unwrap()
+                .name,
+            "radio.example.org"
+        );
+        for url in [
+            "file:///C:/song.mp3",
+            "https://127.0.0.1/live",
+            "http://localhost/live",
+            "https://user:secret@radio.example.org/live",
+            "https://radio.example.org/a b",
+        ] {
+            assert!(network_track(url, "").is_err(), "{url}");
+        }
+    }
+    #[test]
+    fn network_only_import_skips_local_paths_and_keeps_stream_titles() {
+        let dir = fixture();
+        let file = dir.path().join("mixed.m3u8");
+        std::fs::write(&file, "#EXTM3U\nsongs/second.flac\nfile:///missing.mp3\n#EXTINF:-1,Live Radio\nhttps://radio.example.org/live\n#EXTINF:180,Song\nhttps://radio.example.org/song.mp3\n").unwrap();
+        assert!(import(&file).is_err());
+        let report = import_network(&file).unwrap();
+        assert!(report.network);
+        assert_eq!(report.tracks.len(), 2);
+        assert_eq!(report.tracks[0].name, "Live Radio");
+        assert_eq!(report.tracks[1].name, "Song");
+        assert_eq!(report.issue_count, 2);
+        assert!(report
+            .issues
+            .iter()
+            .all(|i| i.reason.contains("Skipped non-HTTP(S)")));
+        std::fs::write(&file, "songs/second.flac\n").unwrap();
+        let report = import_network(&file).unwrap();
+        assert!(report.tracks.is_empty());
+        assert_eq!(report.issue_count, 1);
+    }
+    #[test]
+    fn manually_added_links_must_be_granted_before_station_save() {
+        let track = network_track("https://radio.example.org/live", "Live").unwrap();
+        let request = || library::StationEdit {
+            key: "manual".into(),
+            name: "Manual".into(),
+            mode: "network".into(),
+            tracks: vec![track.clone()],
+            logo_path: None,
+            options: Default::default(),
+        };
+        let mut config = crate::Config::default();
+        assert!(library::upsert(&mut config, request(), &HashSet::new(), &HashSet::new()).is_err());
+        let grants = [track.path.clone()].into_iter().collect();
+        library::upsert(&mut config, request(), &grants, &HashSet::new()).unwrap();
+        assert_eq!(config.custom[0].tracks[0].path, track.path);
+    }
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("songs")).unwrap();
