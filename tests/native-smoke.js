@@ -45,6 +45,9 @@ void (async () => {
       let nativeDenied=false;
       try{await invoke('native_control',{control:{type:'play'}});}catch{nativeDenied=true;}
       assert(nativeDenied,'Mini bypassed the main-player native audio command boundary');
+      let linkDenied=false;
+      try{await invoke('add_network_stream',{url:'https://radio.plaza.one/mp3',name:''});}catch{linkDenied=true;}
+      assert(linkDenied,'Mini could add network stream grants');
       document.querySelector('[aria-label="Pause"]').click();
       await until(
         () => !!document.querySelector('[aria-label="Play"]'),
@@ -77,6 +80,14 @@ void (async () => {
       });
       document.querySelector('[aria-label="Restore main window"]').click();
     } else {
+      const link=await invoke('add_network_stream',{url:'http://radio.plaza.one/mp3',name:'Nightwave Plaza'});
+      assert(link.path==='http://radio.plaza.one/mp3'&&link.name==='Nightwave Plaza'&&link.source==='network','Manual URL command did not return the validated track');
+      const song=await invoke('add_network_stream',{url:'https://radio.plaza.one/example.mp3',name:''});
+      assert(song.path.endsWith('/example.mp3')&&song.name==='radio.plaza.one','Direct MP3 URL command failed');
+      let unsafeDenied=false;
+      try{await invoke('add_network_stream',{url:'http://127.0.0.1/private',name:''});}catch{unsafeDenied=true;}
+      assert(unsafeDenied,'Manual URL command accepted a private address');
+      await invoke('native_smoke_report',{phase:'manualLinks',ok:true,message:'Real main-window URL command, direct MP3 and private address rejection verified without fetching audio'});
       await until(
         () => document.querySelectorAll('.station').length === 2,
         'Fixture library did not load',

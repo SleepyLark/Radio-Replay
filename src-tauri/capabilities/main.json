@@ -14,6 +14,7 @@
     "allow-import-config",
     "allow-choose-audio",
     "allow-choose-playlist",
+    "allow-add-network-stream",
     "allow-choose-bumper-folder",
     "allow-choose-artwork",
     "allow-prepare-station",

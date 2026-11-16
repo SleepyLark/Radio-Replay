@@ -10,6 +10,7 @@ fn main() {
         "import_config",
         "choose_audio",
         "choose_playlist",
+        "add_network_stream",
         "choose_bumper_folder",
         "choose_artwork",
         "prepare_station",
