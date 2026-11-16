@@ -521,6 +521,34 @@ pub fn collect_audio(paths: &[PathBuf]) -> Result<Vec<Track>, String> {
     Ok(result)
 }
 
+/// Remove station entries only, including the last track. Audio files are never touched.
+pub fn remove_tracks(config: &mut Config, key: &str, paths: &[String]) -> Result<(), String> {
+    if paths.len() > 100_000 {
+        return Err("Too many files selected".into());
+    }
+    let station = config
+        .custom
+        .iter_mut()
+        .find(|s| s.key == key)
+        .ok_or("Station no longer exists")?;
+    let selected: HashSet<&str> = paths.iter().map(String::as_str).collect();
+    let removed: HashSet<String> = station
+        .tracks
+        .iter()
+        .filter(|t| selected.contains(t.path.as_str()))
+        .map(|t| format!("{key}|{}", t.path))
+        .collect();
+    station
+        .tracks
+        .retain(|t| !selected.contains(t.path.as_str()));
+    for group in &mut config.groups {
+        if let Some(members) = group.get_mut("members").and_then(|m| m.as_array_mut()) {
+            members.retain(|m| !m.as_str().is_some_and(|s| removed.contains(s)));
+        }
+    }
+    Ok(())
+}
+
 pub fn remove_many(config: &mut Config, keys: &[String]) -> Result<(), String> {
     if keys.is_empty()
         || keys
@@ -867,5 +895,37 @@ mod tests {
         remove(&mut config, "new").unwrap();
         assert_eq!(config.groups[0]["members"], serde_json::json!(["other"]));
         assert!(config.custom.is_empty());
+    }
+    #[test]
+    fn removing_problem_tracks_preserves_files_station_options_and_other_stations() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("keep-on-disk.wav");
+        std::fs::write(&audio, b"audio fixture").unwrap();
+        let path = audio.to_string_lossy().into_owned();
+        let mut config: Config=serde_json::from_value(serde_json::json!({"custom":[
+            {"key":"a","station":"A","tracks":[{"path":path,"name":"Bad"},{"path":"good.wav","name":"Good"}],"mode":"tracks","accent":"#abcdef","bumpers":{"enabled":false}},
+            {"key":"b","station":"B","tracks":[{"path":path,"name":"Other station"}]}],
+            "groups":[{"id":"g","name":"G","members":["a",format!("a|{path}"),"a|good.wav",format!("b|{path}")]}],"logos":{"a":"art.png"}})).unwrap();
+        let options = config.custom[0].extra.clone();
+        remove_tracks(&mut config, "a", &[path.clone(), "stale.wav".into()]).unwrap();
+        assert_eq!(config.custom[0].tracks.len(), 1);
+        assert_eq!(config.custom[0].tracks[0].path, "good.wav");
+        assert_eq!(config.custom[0].extra, options);
+        assert_eq!(config.logos["a"], "art.png");
+        assert_eq!(config.custom[1].tracks[0].path, path);
+        assert_eq!(
+            config.groups[0]["members"],
+            serde_json::json!(["a", "a|good.wav", format!("b|{path}")])
+        );
+        assert_eq!(std::fs::read(audio).unwrap(), b"audio fixture");
+        remove_tracks(&mut config, "a", &["good.wav".into()]).unwrap();
+        assert_eq!(config.custom.len(), 2);
+        assert!(config.custom[0].tracks.is_empty());
+        let store = crate::ConfigStore::new(dir.path().join("stations.json"));
+        store.save(&config).unwrap();
+        assert!(store.load().unwrap().custom[0].tracks.is_empty());
+        let before = serde_json::to_string(&config).unwrap();
+        assert!(remove_tracks(&mut config, "unknown", &[path]).is_err());
+        assert_eq!(serde_json::to_string(&config).unwrap(), before);
     }
 }

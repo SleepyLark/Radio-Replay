@@ -94,6 +94,7 @@ export const choosePlaylist = () => invoke<PlaylistImport|null>('choose_playlist
 export const chooseBumperFolder = () => invoke<string|null>('choose_bumper_folder');
 export const chooseArtwork = () => invoke<string | null>('choose_artwork');
 export const saveStation = (edit: StationEdit) => invoke<Config>('save_station', { edit });
+export const removeStationTracks = (key:string,paths:string[]) => invoke<Config>('remove_station_tracks',{key,paths});
 export const deleteStation = (key: string) => invoke<Config>('delete_station', { key });
 export const deleteStations = (keys: string[]) => invoke<Config>('delete_stations', { keys });
 export const showConfig = () => invoke<void>('open_config');

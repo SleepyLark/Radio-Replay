@@ -2,7 +2,8 @@
   import { onMount, tick, untrack } from 'svelte';
   import Toasts from './Toasts.svelte';
   import ProblemDetails from './ProblemDetails.svelte';
-  import type {Notification} from './notifications';
+  import {removableProblemPaths,type Notification} from './notifications';
+  import {removeStationTracks} from './library';
   import { desktop, emptyConfig, loadConfig, importConfig, artworkUrl, audioUrl, prepareStation, rememberDuration, trackDetails, type TrackDetails, type Config, type Station } from './library';
   import Groups from './Groups.svelte';
   import Settings from './Settings.svelte';
@@ -30,6 +31,14 @@
   let error = $state('');
   let notifications=$state<Notification[]>([]);
   let notificationDetails=$state<Notification|null>(null);
+  function closeProblemDetails(id:number){dismissNotification(id);if(notificationDetails?.id===id)notificationDetails=null;}
+  async function removeProblemFiles(item:Notification){
+    const paths=removableProblemPaths(item,config);if(!item.stationKey||!paths.length)return;
+    const next=await removeStationTracks(item.stationKey,paths);
+    const emptied=playback?.key===item.stationKey&&!next.custom.find(s=>s.key===item.stationKey)?.tracks.length;
+    if(emptied)player?.stop();
+    closeProblemDetails(item.id);saved(next);if(emptied)showView('Stations');
+  }
   let nextNotificationId=0;
   let lastPlaybackNotice=0;
   function notify(item:Omit<Notification,'id'>){notifications=[{...item,id:++nextNotificationId},...notifications.filter(existing=>existing.source!==item.source)].slice(0,3);}
@@ -203,7 +212,7 @@
   </main>
 </div>
 <Toasts items={notifications} raised={view==='Stations'&&!!playback?.key} onview={item=>notificationDetails=item} ondismiss={dismissNotification}/>
-{#if notificationDetails}<ProblemDetails notification={notificationDetails} oncancel={()=>notificationDetails=null} ondismiss={()=>{dismissNotification(notificationDetails!.id);notificationDetails=null;}} onedit={config.custom.some(station=>station.key===notificationDetails?.stationKey)?()=>{const station=config.custom.find(station=>station.key===notificationDetails?.stationKey);notificationDetails=null;if(station)edit(station);}:undefined}/>{/if}
+{#if notificationDetails}{@const item=notificationDetails}<ProblemDetails notification={item} oncancel={()=>closeProblemDetails(item.id)} removableCount={removableProblemPaths(item,config).length} onremove={config.custom.some(station=>station.key===item.stationKey)?()=>removeProblemFiles(item):undefined} onedit={config.custom.some(station=>station.key===item.stationKey)?()=>{const station=config.custom.find(station=>station.key===item.stationKey);closeProblemDetails(item.id);if(station)edit(station);}:undefined}/>{/if}
 {#if editing}{#key editTarget?.key}<StationEditor station={editTarget} logo={editTarget?config.logos[editTarget.key]:''} settings={config.settings} incoming={droppedTracks} onsaved={saved} oncancel={()=>editing=false}/>{/key}{/if}
 {#if groupDraft!==undefined}<Groups {config} group={groupDraft} onsaved={groupSaved} oncancel={()=>groupDraft=undefined}/>{/if}
 {#if managing}<ManageStations {config} onimport={()=>{managing=false;void importLibrary();}} onsaved={next=>{saved(next);managing=false;}} onedit={station=>{managing=false;edit(station);}} oncancel={()=>managing=false}/>{/if}

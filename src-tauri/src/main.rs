@@ -417,6 +417,29 @@ fn save_station(library: State<'_, Library>, edit: StationEdit) -> Result<Config
 }
 
 #[tauri::command]
+fn remove_station_tracks(
+    window: tauri::WebviewWindow,
+    library: State<'_, Library>,
+    key: String,
+    paths: Vec<String>,
+) -> Result<Config, String> {
+    if window.label() != "main" {
+        return Err("Main player required".into());
+    }
+    let store = library.0.lock().map_err(|e| e.to_string())?;
+    let mut config = store.load()?;
+    library::remove_tracks(&mut config, &key, &paths)?;
+    store.save(&config)?;
+    let prefix = format!("{key}\0");
+    library
+        .3
+        .lock()
+        .map_err(|e| e.to_string())?
+        .retain(|grant, _| !grant.starts_with(&prefix));
+    Ok(config)
+}
+
+#[tauri::command]
 fn delete_station(library: State<'_, Library>, key: String) -> Result<Config, String> {
     delete_stations(library, vec![key])
 }
@@ -535,6 +558,7 @@ fn main() {
                 resolve_tuning_sound,
                 recover_legacy_library,
                 save_station,
+                remove_station_tracks,
                 delete_station,
                 delete_stations,
                 open_config,

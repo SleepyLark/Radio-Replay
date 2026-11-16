@@ -109,7 +109,7 @@ const server = http.createServer((req, res) => {
         assert(document.querySelector('.problem-list code').textContent==='C:\\\\Radio\\\\missing.mp3','Problematic path missing from details');
         assert(document.querySelector('.problem-list').textContent.includes('File not found'),'Failure reason missing');
         const problemSearch=document.querySelector('dialog input');problemSearch.value='not-present';problemSearch.dispatchEvent(new Event('input',{bubbles:true}));await wait(20);assert(document.querySelector('.problem-list').textContent.includes('No files match'),'Problem search did not filter');
-        button('Close').click();await wait(20);document.querySelector('.toast-dismiss').click();await wait(300);
+        button('Close').click();await wait(300);
         assert(!document.querySelector('.toast'),'Dismissed toast returned during progress updates');
         assert(document.querySelector('[aria-label="Pause"]'),'Viewing/dismissing warning stopped playback');
         window.__testMediaAction('pause');await until(()=>document.querySelector('[aria-label="Play"]'),'Media pause failed');
@@ -140,20 +140,20 @@ const server = http.createServer((req, res) => {
         button('Choose bumper folder').click();await until(()=>!button('Save station').disabled,'Bumper folder not accepted');
         const setNumber=(text,value)=>{const input=label(text).querySelector('input');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));};
         setNumber('Minimum songs','2');setNumber('Maximum songs','5');await wait(20);
-        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Bumper settings not saved');
+        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Bumper settings not saved');await until(()=>document.querySelector('[aria-label="Pause"]'),'Playback did not resume after bumper edit');
         let saved=window.__testConfig().custom.find(s=>s.station==='Fixture Radio Live').bumpers;
         assert(saved.enabled&&saved.method==='songs'&&saved.min===2&&saved.max===5&&saved.folder.endsWith('Bumpers'),'Song bumper settings missing');
         button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Bumper reopen failed');
         const method=label('Interval method').querySelector('select');method.value='time';method.dispatchEvent(new Event('change',{bubbles:true}));await wait(20);
         setNumber('Minimum minutes','10');setNumber('Maximum minutes','10');await wait(20);
-        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Time settings not saved');
+        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Time settings not saved');await until(()=>document.querySelector('[aria-label="Pause"]'),'Playback did not resume after bumper edit');
         saved=window.__testConfig().custom.find(s=>s.station==='Fixture Radio Live').bumpers;
         assert(saved.method==='time'&&saved.min===10&&saved.max===10,'Fixed time interval not saved');
         button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Bumper reopen failed');
         setNumber('Minimum minutes','20');setNumber('Maximum minutes','10');await wait(20);
         assert(button('Save station').disabled,'Reversed interval allowed');
         label('Enable bumper clips').querySelector('input').click();await wait(20);
-        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Cannot disable invalid bumper interval');
+        button('Save station').click();await until(()=>!document.querySelector('dialog'),'Cannot disable invalid bumper interval');await until(()=>document.querySelector('[aria-label="Pause"]'),'Playback did not resume after bumper edit');
         button('Edit station').click();await until(()=>document.querySelector('dialog')?.open,'Editor reopen failed');
         button('Radio broadcast').click();await wait(20);
         assert(![...document.querySelectorAll('dialog summary')].some(e=>e.textContent==='Bumpers'),'Continuous broadcast exposes bumper controls');
@@ -234,7 +234,7 @@ const server = http.createServer((req, res) => {
       );
       await new Promise((resolve) => setTimeout(resolve, 30));
       await page.evaluate(
-        `document.querySelector('.toast-dismiss').click()`,
+        `if(document.querySelector('.toast'))throw Error('Closing details did not dismiss notification')`,
       );
       fs.writeFileSync(
         path.join(output, 'ui-player.png'),
@@ -297,6 +297,36 @@ const server = http.createServer((req, res) => {
         button('Cancel').click();await until(()=>!document.querySelector('dialog'),'New station cancel failed');
         return 'Local playlist UI passed: import, preserved mode/order, duplicates, skipped entries, cancel, error, retry, dismissal and save.';
       }));
+      const problemsPage=await browser.newPage({viewport:{width:1200,height:800}});
+      await problemsPage.addInitScript({path:path.join(__dirname,'ui-fixture.js')});
+      await problemsPage.goto(`http://127.0.0.1:${server.address().port}`);
+      console.log(await problemsPage.evaluate(async()=>{
+        const wait=ms=>new Promise(r=>setTimeout(r,ms));const until=async(test,message)=>{for(let i=0;i<100;i++){if(test())return;await wait(30);}throw Error(message);};
+        const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);const assert=(ok,message)=>{if(!ok)throw Error(message);};
+        await until(()=>document.querySelector('.home-station'),'Problem fixture missing');document.querySelector('.home-station').click();
+        await until(()=>document.querySelector('.toast-details'),'Problem notification missing');document.querySelector('.toast-details').click();
+        await until(()=>document.querySelector('dialog')?.open,'Problem dialog missing');
+        const remove=button('Remove problematic files'),close=button('Close');
+        assert(remove&&!remove.disabled,'Removal button missing');assert(!button('Dismiss notification'),'Old dismiss button remains');
+        assert(remove.getBoundingClientRect().left<close.getBoundingClientRect().left,'Removal action is not on left');
+        const color=getComputedStyle(remove).color.match(/\d+/g).map(Number);assert(color[0]>color[1],'Removal button is not red');
+        const input=document.querySelector('dialog input');input.value='no-such-file';input.dispatchEvent(new Event('input',{bubbles:true}));await wait(30);
+        window.__testFailRemoval();remove.click();await until(()=>document.querySelector('dialog [role="alert"]'),'Removal failure hidden');
+        assert(window.__testConfig().custom[0].tracks.length===3,'Failed removal changed station');assert(document.querySelector('.toast'),'Failed removal dismissed warning');
+        remove.click();await until(()=>!document.querySelector('dialog'),'Removal did not close dialog');
+        await until(()=>document.querySelector('[aria-label="Pause"]'),'Healthy playback did not resume');
+        assert(window.__testConfig().custom[0].tracks.length===2,'Search prevented removing all reported files');
+        assert(!window.__testConfig().custom[0].tracks.some(t=>t.path.includes('missing.mp3')),'Problem file retained');
+        assert(!document.querySelector('.toast'),'Removal left notification visible');
+        return 'Problem dialog passed: red left action, full-list removal during search, failure/retry, healthy entries retained, close/dismiss.';
+      }));
+      await problemsPage.reload();
+      await problemsPage.waitForSelector('.home-station');await problemsPage.locator('.home-station').first().click();
+      await problemsPage.waitForSelector('.toast-details');await problemsPage.locator('.toast-details').click();await problemsPage.waitForSelector('dialog[open]');
+      fs.writeFileSync(path.join(output,'ui-problem-actions.png'),await problemsPage.screenshot());
+      await problemsPage.keyboard.press('Escape');await problemsPage.waitForSelector('dialog',{state:'detached'});
+      if(await problemsPage.locator('.toast').count())throw Error('Escape did not dismiss notification');
+      await problemsPage.close();
       await page.setViewportSize({width:760,height:560});
       await new Promise((r) => setTimeout(r, 100));
       console.log(

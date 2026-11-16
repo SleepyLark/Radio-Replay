@@ -156,7 +156,7 @@ void (async () => {
         'Native failure reason not reported',
       );
       [...document.querySelectorAll('dialog button')]
-        .find((b) => b.textContent === 'Dismiss notification')
+        .find((b) => b.textContent === 'Close')
         .click();
       await until(() => !document.querySelector('dialog'), 'File report did not close');
       await wait(300);

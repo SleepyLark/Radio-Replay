@@ -26,6 +26,7 @@
     "allow-resolve-tuning-sound",
     "allow-recover-legacy-library",
     "allow-save-station",
+    "allow-remove-station-tracks",
     "allow-delete-station",
     "allow-delete-stations",
     "allow-open-config",

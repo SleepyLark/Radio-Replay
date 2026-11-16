@@ -27,6 +27,8 @@ for (const [key, station, mode] of [
   ['archive', 'Archive 89.4', 'longset'],
 ])
   config.custom.push({ key, station, mode, tracks: [{ path: 'first.wav', name: 'First' }] });
+let rejectRemoval=false;
+contextBridge.exposeInMainWorld('__testFailRemoval',()=>rejectRemoval=true);
 let playlistResult;
 contextBridge.exposeInMainWorld('__testPlaylist',value=>playlistResult=value);
 const calls = [];
@@ -153,6 +155,12 @@ contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
         return playlistResult===undefined?{name:'Imported playlist',tracks:[{path:'first.wav',name:'First'},{path:'playlist-two.wav',name:'Playlist Two'},{path:'playlist-three.wav',name:'Playlist Three'}],issues:[{line:6,entry:'https://example.invalid/live',reason:'Network streams are not supported in local playlist imports'}],issueCount:1}:playlistResult;
       case 'choose_bumper_folder':
         return 'C:\\Radio\\Bumpers';
+      case 'remove_station_tracks': {
+        if(rejectRemoval){rejectRemoval=false;throw new Error('Fixture removal failed');}
+        const paths=new Set(args.paths);config.custom=config.custom.map(s=>s.key===args.key?{...s,tracks:s.tracks.filter(t=>!paths.has(t.path))}:s);
+        const members=new Set(args.paths.map(p=>args.key+'|'+p));config.groups=config.groups.map(g=>({...g,members:g.members.filter(m=>!members.has(m))}));
+        return structuredClone(config);
+      }
       case 'save_station': {
         const edit = args.edit;
         config.custom = config.custom.map((s) =>

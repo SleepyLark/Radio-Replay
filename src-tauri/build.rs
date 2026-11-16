@@ -22,6 +22,7 @@ fn main() {
         "resolve_tuning_sound",
         "recover_legacy_library",
         "save_station",
+        "remove_station_tracks",
         "delete_station",
         "delete_stations",
         "open_config",
