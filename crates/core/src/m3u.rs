@@ -173,7 +173,9 @@ pub fn import(path: &Path) -> Result<Import, String> {
     Ok(report)
 }
 fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
-    if entry.chars().any(char::is_control) {
+    // C1 characters (U+0080–U+009F) can be part of valid Windows filenames,
+    // including mojibake. Preserve those names exactly; reject ASCII controls.
+    if entry.chars().any(|c| c.is_ascii_control()) {
         return Err("Invalid control character in path".into());
     }
     let drive = entry.as_bytes().get(1) == Some(&b':') && entry.as_bytes()[0].is_ascii_alphabetic();
@@ -200,7 +202,11 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
             let local = url
                 .to_file_path()
                 .map_err(|_| "Invalid local file URL for this platform")?;
-            if local.to_string_lossy().chars().any(char::is_control) {
+            if local
+                .to_string_lossy()
+                .chars()
+                .any(|c| c.is_ascii_control())
+            {
                 return Err("Invalid file path".into());
             }
             return Ok(local);
@@ -217,7 +223,7 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
     let decoded = percent_encoding::percent_decode_str(entry)
         .decode_utf8()
         .map_err(|_| "Invalid UTF-8 in escaped path")?;
-    if decoded.chars().any(char::is_control) {
+    if decoded.chars().any(|c| c.is_ascii_control()) {
         return Err("Invalid control character in escaped path".into());
     }
     // Decode only relative file references, never turn an escaped URL into a stream.
@@ -397,5 +403,43 @@ mod tests {
         .unwrap();
         assert_eq!(result.tracks.len(), 1);
         assert_eq!(result.issue_count, 2);
+    }
+    #[test]
+    fn unicode_and_mojibake_filenames_are_preserved_for_all_local_reference_forms() {
+        let dir = fixture();
+        for name in [
+            "30 Poke\u{00cc}\u{0081}mon Mansion.mp3",
+            "Pok\u{00e9}mon.mp3",
+            "Poke\u{0301}mon.mp3",
+        ] {
+            let file = dir.path().join("songs").join(name);
+            std::fs::write(&file, b"fixture").unwrap();
+            let expected = std::fs::canonicalize(&file).unwrap();
+            let escaped =
+                percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
+            for entry in [
+                format!("songs/{name}"),
+                file.display().to_string(),
+                format!("songs/{escaped}"),
+                url::Url::from_file_path(&file).unwrap().to_string(),
+            ] {
+                let result =
+                    read(dir.path(), "unicode.m3u8", format!("#EXTM3U\n{entry}\n")).unwrap();
+                assert_eq!(result.tracks.len(), 1, "{entry:?}");
+                assert_eq!(result.issue_count, 0);
+                assert_eq!(Path::new(&result.tracks[0].path), expected);
+            }
+        }
+    }
+    #[test]
+    fn ascii_controls_remain_rejected_in_literal_and_escaped_paths() {
+        let dir = fixture();
+        for code in [0u8, 1, 9, 10, 13, 31, 127] {
+            assert!(resolve(dir.path(), &format!("songs/a{}b.mp3", char::from(code))).is_err());
+            assert!(resolve(dir.path(), &format!("songs/a%{code:02X}b.mp3")).is_err());
+            let file = dir.path().join(format!("a{}b.mp3", char::from(code)));
+            let uri = url::Url::from_file_path(file).unwrap();
+            assert!(resolve(dir.path(), uri.as_str()).is_err());
+        }
     }
 }
