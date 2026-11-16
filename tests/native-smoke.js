@@ -286,6 +286,19 @@ void (async () => {
         await until(async()=>{const s=await invoke('native_snapshot');return s.index===1&&s.playing;},'Native IPC lost station programme on retune');
         await invoke('native_smoke_report',{phase:'bumpers',ok:true,message:'Folder preparation, cached duration, no-overlap insertion, pause, next song and retune verified through native IPC'});
       }
+      if(audioBackend==='mpv'&&await invoke('native_smoke_report',{phase:'networkEnabled',ok:true,message:''})) {
+        await invoke('native_smoke_report',{phase:'prepareNetwork',ok:true,message:'Opt-in public network station'});
+        const started=await invoke('native_begin',{delayMs:0});
+        const prepared=await invoke('native_prepare',{generation:started.generation,key:'a',group:'all'});
+        assert(prepared.tracks.length===1&&prepared.tracks[0].duration===null,'Network source was probed as local media');
+        const paths=prepared.tracks.map(t=>t.path);
+        let denied=false;try{await invoke('native_load',{generation:started.generation,key:'a',paths:['http://127.0.0.1/private'],index:0,seconds:0,fade:0});}catch{denied=true;}assert(denied,'Unprepared network URL accepted');
+        await invoke('native_load',{generation:started.generation,key:'a',paths,index:0,seconds:0,fade:0});
+        await until(async()=>{const s=await invoke('native_snapshot');return s.playing&&s.path===paths[0];},'Guarded network stream did not play through IPC');
+        await invoke('native_control',{control:{type:'pause'}});assert(!(await invoke('native_snapshot')).playing,'Network pause failed');
+        await invoke('native_control',{control:{type:'play'}});
+        await invoke('native_smoke_report',{phase:'network',ok:true,message:'Prepared saved URL, unknown duration, grant enforcement, guarded HTTP audio and pause/resume verified'});
+      }
       await invoke('native_smoke_report', {
         phase: 'complete',
         ok: true,

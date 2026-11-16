@@ -124,3 +124,15 @@ test('continuous broadcasts never load a bumper catalogue',async()=>{
     assert.deepEqual(plan.paths,['broadcast']);assert.equal(plan.bumperCount,0);
   }finally{player.dispose();}
 });
+
+test('network stations start at the first URL without probing, virtual seeking, fades or duration writes',async()=>{
+  const urls=['https://radio.example.org/song.mp3','https://radio.example.org/live'];
+  const {player,calls,emit}=setup(async()=>({tracks:urls.map(path=>({...track(path),duration:null,source:'network'})),problems:[]}));
+  try{
+    await player.tune({...station('radio'),mode:'network',crossfade:5000});
+    const plan=calls.find(c=>c.command==='native_load').args;
+    assert.deepEqual(plan.paths,urls);assert.equal(plan.index,0);assert.equal(plan.seconds,0);assert.equal(plan.fade,0);assert.equal(plan.bumperCount,0);
+    assert.equal(player.state.network,true);emit({index:1,path:urls[1],duration:0,seconds:5,playing:true});assert.equal(player.state.path,urls[1]);
+    assert.equal(calls.filter(c=>c.command==='remember_duration').length,0);
+  }finally{player.dispose();}
+});

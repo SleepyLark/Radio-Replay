@@ -275,6 +275,14 @@ impl Runtime {
             || plan.paths.is_empty()
             || plan.paths.len() > 100000
             || plan.index >= plan.paths.len()
+            || plan.network
+                && (plan.fade != 0.0
+                    || plan.seconds != 0.0
+                    || plan.bumpers.is_some()
+                    || plan
+                        .paths
+                        .iter()
+                        .any(|p| radio_replay_network::validate(&p.to_string_lossy()).is_err()))
             || !plan.seconds.is_finite()
             || !(0.0..=172800.0).contains(&plan.seconds)
             || !plan.fade.is_finite()
@@ -332,7 +340,11 @@ impl Runtime {
         self.ready = false;
         self.load_started = Instant::now();
         self.volume()?;
-        self.mpv.load_local(&path)
+        if self.plan.as_ref().is_some_and(|p| p.network) {
+            self.mpv.load_network(&path.to_string_lossy())
+        } else {
+            self.mpv.load_local(&path)
+        }
     }
     fn volume(&mut self) -> Result<(), String> {
         let level = if self.state.muted {
@@ -482,12 +494,21 @@ impl Runtime {
         if self.programme.is_some() {
             return self.next_programme(false).map(|c| c.current);
         }
+        if self.plan.as_ref()?.network && self.blocked.len() >= 3 {
+            return None;
+        }
         let count = self.plan.as_ref()?.paths.len();
         (1..=count)
             .map(|offset| (self.state.index + offset) % count)
             .find(|index| !self.blocked.contains(index))
     }
     fn fail(&mut self, mut error: String) {
+        if self.plan.as_ref().is_some_and(|p| p.network) {
+            let reason = self.mpv.network_error();
+            if !reason.is_empty() {
+                error = reason;
+            }
+        }
         self.clear_auxiliary();
         loop {
             self.issue(self.state.path.clone(), error);
@@ -587,7 +608,11 @@ impl Runtime {
             .set("pause", if self.want_play { "no" } else { "yes" })
     }
     fn preload(&mut self) -> Result<(), String> {
-        if self.state.loading || !self.ready || self.auxiliary_failed || self.state.duration <= 0.0
+        if self.plan.as_ref().is_some_and(|p| p.network)
+            || self.state.loading
+            || !self.ready
+            || self.auxiliary_failed
+            || self.state.duration <= 0.0
         {
             return Ok(());
         }
@@ -913,6 +938,7 @@ mod tests {
                 seconds: 2.6,
                 fade: 1.0,
                 bumpers: None,
+                network: false,
             })
             .unwrap();
         until(&mut runtime, 1, |r| r.state.playing);
@@ -1013,6 +1039,7 @@ mod tests {
                 seconds: 3.2,
                 fade: 0.0,
                 bumpers: None,
+                network: false,
             })
             .unwrap();
         until(&mut runtime, 2, |r| {
@@ -1038,6 +1065,7 @@ mod tests {
                 seconds: 2.8,
                 fade: 1.0,
                 bumpers: None,
+                network: false,
             })
             .unwrap();
         until(&mut runtime, 3, |r| r.state.transitioning);
@@ -1073,6 +1101,7 @@ mod tests {
                 seconds: 0.0,
                 fade: 0.0,
                 bumpers: None,
+                network: false,
             })
             .unwrap();
         until(&mut runtime, 6, |r| !r.state.loading);
@@ -1108,6 +1137,7 @@ mod tests {
             index: 0,
             seconds: 3.5,
             fade: 1.0,
+            network: false,
             bumpers: Some(Bumpers {
                 music_count: 2,
                 lengths: vec![4.0, 4.0, 2.0],
@@ -1166,5 +1196,102 @@ mod tests {
         );
         runtime.control(Control::Stop).unwrap();
         assert!(runtime.auxiliary.is_none() && !runtime.state.bumper);
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; real decoder with guarded custom IO"]
+    fn real_network_custom_io_queue_and_stop() {
+        let library = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("stream.wav");
+        fixture(&file, 1.2);
+        let mut runtime = Runtime::open(library.into()).unwrap();
+        *runtime.mpv._stream.fixture.lock().unwrap() = Some(std::fs::read(file).unwrap());
+        runtime.control(Control::Volume(0.0)).unwrap();
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec![
+                    "https://radio.example.org/first".into(),
+                    "https://radio.example.org/second".into(),
+                ],
+                index: 0,
+                seconds: 0.0,
+                fade: 0.0,
+                bumpers: None,
+                network: true,
+            })
+            .unwrap();
+        until(&mut runtime, 1, |r| r.state.playing);
+        assert_eq!(runtime.state.index, 0);
+        assert!(runtime.auxiliary.is_none());
+        runtime.control(Control::Pause).unwrap();
+        tick_for(&mut runtime, 1, Duration::from_millis(150));
+        assert!(!runtime.state.playing);
+        runtime.control(Control::Play).unwrap();
+        until(&mut runtime, 1, |r| r.state.playing && r.state.index == 1);
+        assert!(!runtime.state.transitioning);
+        assert!(runtime.auxiliary.is_none());
+        runtime.control(Control::Stop).unwrap();
+        assert!(!runtime.state.playing);
+        // A disguised playlist must never become a decoder/network instruction.
+        *runtime.mpv._stream.fixture.lock().unwrap() =
+            Some(b"#EXTM3U\nfile:///C:/private.wav\nhttp://127.0.0.1/private\n".to_vec());
+        runtime.begin(2, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec!["https://radio.example.org/disguised.mp3".into()],
+                index: 0,
+                seconds: 0.0,
+                fade: 0.0,
+                bumpers: None,
+                network: true,
+            })
+            .unwrap();
+        until(&mut runtime, 2, |r| {
+            !r.state.error.is_empty() && !r.state.loading
+        });
+        assert!(!runtime.state.playing);
+    }
+    #[test]
+    #[ignore = "Needs libmpv and an explicitly supplied public test stream URL"]
+    fn real_public_http_stream() {
+        let library = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap();
+        let url = std::env::var("RADIO_REPLAY_NETWORK_TEST_URL").unwrap();
+        let mut runtime = Runtime::open(library.into()).unwrap();
+        runtime.control(Control::Volume(0.0)).unwrap();
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec![url.into()],
+                index: 0,
+                seconds: 0.0,
+                fade: 0.0,
+                bumpers: None,
+                network: true,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(25);
+        while !runtime.state.playing && Instant::now() < deadline {
+            runtime.poll(1);
+            if !runtime.state.error.is_empty() {
+                panic!("{}", runtime.state.error);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(runtime.state.playing, "Public stream did not start");
+        tick_for(&mut runtime, 1, Duration::from_secs(1));
+        assert!(runtime.state.playing);
+        let before = runtime.state.seconds;
+        runtime.control(Control::Pause).unwrap();
+        tick_for(&mut runtime, 1, Duration::from_millis(200));
+        assert!(!runtime.state.playing);
+        assert!((runtime.state.seconds - before).abs() < 0.15);
+        runtime.control(Control::Play).unwrap();
+        tick_for(&mut runtime, 1, Duration::from_millis(200));
+        assert!(runtime.state.playing);
+        let stopped = Instant::now();
+        runtime.control(Control::Stop).unwrap();
+        assert!(stopped.elapsed() < Duration::from_secs(2));
+        assert!(runtime.auxiliary.is_none());
     }
 }

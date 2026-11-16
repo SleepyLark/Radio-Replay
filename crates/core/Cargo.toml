@@ -14,3 +14,5 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 url = "2.5"
 percent-encoding = "2.3"
 encoding_rs = "0.8"
+
+radio-replay-network = { path = "../network" }

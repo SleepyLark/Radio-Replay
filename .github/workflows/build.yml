@@ -73,7 +73,7 @@ jobs:
           node --test tests/runtime-setup.cjs
           $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
           $env:RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT = '1'
-          cargo test -p radio-replay-audio --locked -- --ignored
+          cargo test -p radio-replay-audio --locked -- --ignored --skip real_public_http_stream
       - name: Install browser for integration tests
         if: runner.os == 'Windows'
         run: npx playwright install msedge

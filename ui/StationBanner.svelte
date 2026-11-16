@@ -2,7 +2,7 @@
   import { artworkUrl, type Station } from './library';
   let {station, logo, number = 1, playing = false, preview = false, layout = 'row'}: {station: Station; logo: unknown; number?: number; playing?: boolean; preview?: boolean; layout?: unknown} = $props();
   const color = $derived(typeof station.bannerColor === 'string' && /^#[0-9a-f]{6}$/i.test(station.bannerColor) ? station.bannerColor : '#0b1513');
-  const subtitle = $derived(station.mode === 'tracks' ? `${station.tracks.length} TRACKS • SHUFFLE PROGRAM` : 'CONTINUOUS BROADCAST');
+  const subtitle = $derived(station.mode==='network'?`${station.tracks.length} STREAMS • NETWORK PROGRAM`:station.mode === 'tracks' ? `${station.tracks.length} TRACKS • SHUFFLE PROGRAM` : 'CONTINUOUS BROADCAST');
 </script>
 
 {#if preview}

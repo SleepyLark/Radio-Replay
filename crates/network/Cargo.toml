@@ -1,0 +1,14 @@
+[package]
+name = "radio-replay-network"
+version = "0.6.6"
+edition = "2021"
+license = "MIT"
+
+[features]
+default = []
+transport = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+url = "2.5"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt", "net", "time", "macros"], optional = true }

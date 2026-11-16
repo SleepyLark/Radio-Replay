@@ -20,3 +20,5 @@ radio-replay-audio = { path = "../crates/audio", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 souvlaki = "0.8.3"
+
+radio-replay-network = { path = "../crates/network" }

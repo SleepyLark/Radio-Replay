@@ -18,6 +18,7 @@ pub struct Import {
     pub tracks: Vec<Track>,
     pub issues: Vec<Issue>,
     pub issue_count: usize,
+    pub network: bool,
 }
 #[derive(Serialize)]
 pub struct Issue {
@@ -73,6 +74,7 @@ pub fn import(path: &Path) -> Result<Import, String> {
         tracks: Vec::new(),
         issues: Vec::new(),
         issue_count: 0,
+        network: false,
     };
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         return Err("UTF-16 playlists are unsupported. Export as UTF-8 M3U8 instead.".into());
@@ -131,27 +133,48 @@ pub fn import(path: &Path) -> Result<Import, String> {
             );
         }
         let label = title.take();
-        let result = resolve(base, entry).and_then(|path| {
-            if playlist_file(&path) {
-                return Err(
-                    "Nested playlists are not expanded; import their local audio separately".into(),
-                );
-            }
-            if !library::audio_file(&path) {
-                return Err("Not a supported audio file (MP3, M4A, AAC, OGG, WAV or FLAC)".into());
-            }
-            let metadata =
-                std::fs::metadata(&path).map_err(|e| format!("Cannot access audio file: {e}"))?;
-            if !metadata.is_file() {
-                return Err("Entry is not an audio file".into());
-            }
-            library::track(path)
-        });
+        let web = entry
+            .get(..7)
+            .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+            || entry
+                .get(..8)
+                .is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+        let result = if web {
+            radio_replay_network::validate(entry).map(|url| Track {
+                path: url.to_string(),
+                name: label.clone().unwrap_or_else(|| "Network stream".into()),
+                extra: serde_json::from_value(serde_json::json!({"source":"network"})).unwrap(),
+            })
+        } else {
+            resolve(base, entry).and_then(|path| {
+                if playlist_file(&path) {
+                    return Err(
+                        "Nested playlists are not expanded; import their local audio separately"
+                            .into(),
+                    );
+                }
+                if !library::audio_file(&path) {
+                    return Err(
+                        "Not a supported audio file (MP3, M4A, AAC, OGG, WAV or FLAC)".into(),
+                    );
+                }
+                let metadata = std::fs::metadata(&path)
+                    .map_err(|e| format!("Cannot access audio file: {e}"))?;
+                if !metadata.is_file() {
+                    return Err("Entry is not an audio file".into());
+                }
+                library::track(path)
+            })
+        };
         match result {
             Ok(mut track) => {
                 // Canonical paths also collapse literal/URI aliases of the same file.
                 #[cfg(windows)]
-                let identity = track.path.to_lowercase();
+                let identity = if web {
+                    track.path.clone()
+                } else {
+                    track.path.to_lowercase()
+                };
                 #[cfg(not(windows))]
                 let identity = track.path.clone();
                 if !seen.insert(identity) {
@@ -168,6 +191,22 @@ pub fn import(path: &Path) -> Result<Import, String> {
                 report.tracks.push(track);
             }
             Err(reason) => report.issue(line, entry, reason),
+        }
+    }
+    report.network = report
+        .tracks
+        .iter()
+        .any(|t| t.extra.get("source").and_then(|v| v.as_str()) == Some("network"));
+    if report.network {
+        if report
+            .tracks
+            .iter()
+            .any(|t| t.extra.get("source").and_then(|v| v.as_str()) != Some("network"))
+        {
+            return Err("Mixed local/network playlists are not supported yet. Import them as separate stations.".into());
+        }
+        if report.tracks.len() > 1000 {
+            return Err("Network playlists are limited to 1,000 streams".into());
         }
     }
     Ok(report)
@@ -298,7 +337,7 @@ mod tests {
         assert_eq!(result.tracks[0].name, "first song");
         assert_eq!(result.issue_count, 4);
         assert_eq!(result.issues[0].line, 2);
-        assert!(result.issues[0].reason.contains("Network"));
+        assert!(result.issues[0].reason.contains("public"));
     }
     #[test]
     fn streams_schemes_and_hls_are_never_imported() {
@@ -441,5 +480,78 @@ mod tests {
             let uri = url::Url::from_file_path(file).unwrap();
             assert!(resolve(dir.path(), uri.as_str()).is_err());
         }
+    }
+    #[test]
+    fn network_playlists_import_without_connecting_and_reject_mixed_sources() {
+        let dir = fixture();
+        let result=read(dir.path(),"network.m3u", "#EXTM3U\n#EXTINF:-1,A Skillz, Dr Luke - Bring Back The Funk\nhttps://jetsetradio.live/radio/stations/ggs/A%20Skillz%2C%20Dr%20Luke.mp3\n#EXTINF:-1,Casiopea\nhttps://nonstopcasiopea.radioca.st/;\n").unwrap();
+        assert!(result.network);
+        assert_eq!(result.tracks.len(), 2);
+        assert_eq!(result.issue_count, 0);
+        assert_eq!(
+            result.tracks[0].name,
+            "A Skillz, Dr Luke - Bring Back The Funk"
+        );
+        assert_eq!(result.tracks[0].extra["source"], "network");
+        let grants = result.tracks.iter().map(|t| t.path.clone()).collect();
+        let mut config = crate::Config::default();
+        let request = || library::StationEdit {
+            key: "network".into(),
+            name: "Radio".into(),
+            mode: "network".into(),
+            tracks: result.tracks.clone(),
+            logo_path: None,
+            options: Default::default(),
+        };
+        assert!(library::upsert(&mut config, request(), &HashSet::new(), &HashSet::new()).is_err());
+        library::upsert(&mut config, request(), &grants, &HashSet::new()).unwrap();
+        let report = library::playback_report_for_group(config, "network", None).unwrap();
+        assert_eq!(report.tracks.len(), 2);
+        assert!(report
+            .tracks
+            .iter()
+            .all(|t| t.duration.is_none() && t.cache_signature.is_none()));
+        assert!(read(
+            dir.path(),
+            "mixed.m3u",
+            "songs/second.flac\nhttps://radio.example.org/live\n"
+        )
+        .err()
+        .unwrap()
+        .contains("Mixed"));
+        let blocked = read(
+            dir.path(),
+            "blocked.m3u",
+            "http://127.0.0.1/private\nhttps://169.254.169.254/metadata\n",
+        )
+        .unwrap();
+        assert!(blocked.tracks.is_empty());
+        assert_eq!(blocked.issue_count, 2);
+    }
+    #[test]
+    #[ignore = "Read-only check of a user-supplied playlist; no URL connections"]
+    fn supplied_network_playlist_import() {
+        let file = std::env::var_os("RADIO_REPLAY_M3U_TEST_FILE").unwrap();
+        let report = import(Path::new(&file)).unwrap();
+        assert!(report.network);
+        assert!(report.tracks.len() > 1);
+        assert_eq!(report.issue_count, 0);
+        println!(
+            "Imported {} network song entries without fetching audio",
+            report.tracks.len()
+        );
+    }
+    #[test]
+    fn url_paths_keep_case_sensitive_identity_on_windows_too() {
+        let dir = fixture();
+        let result = read(
+            dir.path(),
+            "case.m3u8",
+            "https://radio.example.org/Song.mp3\nhttps://radio.example.org/song.mp3\n",
+        )
+        .unwrap();
+        assert!(result.network);
+        assert_eq!(result.tracks.len(), 2);
+        assert_eq!(result.issue_count, 0);
     }
 }

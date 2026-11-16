@@ -18,6 +18,7 @@ pub struct Snapshot {
     pub duration: f64,
     pub volume: f64,
     pub muted: bool,
+    pub network: bool,
 }
 impl Snapshot {
     pub fn validate(&self) -> Result<(), String> {

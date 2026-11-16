@@ -73,7 +73,7 @@
   const timed=$derived(parseTimedText(details?.sidecar??null));
   const lineIndex=$derived(currentLine(timed,playback?.seconds??0));
   const playingStation=$derived(config.custom.find(s=>s.key===playback?.key));
-  const textMode=$derived(playback?.bumper?'ignore':['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
+  const textMode=$derived(playback?.bumper||playingStation?.mode==='network'?'ignore':['titles','lyrics','ignore'].includes(String(playingStation?.textMode))?String(playingStation?.textMode):playingStation?.mode==='longset'?'titles':'lyrics');
   const metadataTitle=$derived(details?.tags.title?.trim()??'');
   const embeddedTitle=$derived(metadataTitle?`${details?.tags.artist?details.tags.artist+' - ':''}${metadataTitle}`:playback?.bumper?'Bumper':playback?.title??'');
   const displayTitle=$derived(textMode==='titles'&&lineIndex>=0?timed[lineIndex].text:embeddedTitle);
@@ -104,7 +104,7 @@
   }
   function desktopAction(action:DesktopAction){switch(action.type){case'toggle':toggle();break;case'play':if(!playback?.playing)void player?.play();break;case'pause':if(playback?.playing)void player?.pause();break;case'previous':step(-1);break;case'next':step(1);break;case'mute':player?.mute();break;case'volume':if(Number.isFinite(action.value))player?.setVolume(action.value);break;}}
   async function mini(){try{await publish();await openMini();}catch(e){error=String(e);}}
-  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',title:playback?.bumper?(metadataTitle?'Bumper · '+metadataTitle:'Bumper'):textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
+  function publish(){if(!desktop)return Promise.resolve();const snapshot:DesktopSnapshot={station:playingStation?.station??'',network:playingStation?.mode==='network',title:playback?.bumper?(metadataTitle?'Bumper · '+metadataTitle:'Bumper'):textMode==='titles'?displayTitle:(details?.tags.title||playback?.title||''),artist:details?.tags.artist??'',album:details?.tags.album??'',art:artworkUrl(config.logos[playback?.key??'']),banner:bannerPath,bannerColor:typeof playingStation?.bannerColor==='string'?playingStation.bannerColor:'',accent,playing:playback?.playing??false,hasStation:!!playback?.key&&!playback.loading,canNavigate:lineup.length>0,seconds:playback?.seconds??0,duration:playback?.duration??0,volume:playback?.volume??.8,muted:playback?.muted??false};browserMedia?.update(snapshot);return publishDesktop(snapshot);}
   function edit(station: Station | null) { editorSession++;droppedTracks=[];editTarget = station; editing = true; }
   function saved(next: Config) {
     const wasPlaying=playback?.playing;
@@ -174,7 +174,7 @@
       </div>
       <input id="stationSearch" type="search" aria-label="Search stations" placeholder="Search stations…" bind:value={query}/>
       <nav id="stationList" aria-label="Radio stations">
-        {#each sections as [heading,list]}<section class="game">{#if heading}<h2>{heading}</h2>{/if}{#each list as station}<button class="station sidebar-station" class:active={activeKey===station.key} aria-current={activeKey===station.key?'true':undefined} onclick={()=>tune(station)}><span>{station.station}</span><small>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'broadcast'}</small></button>{/each}</section>{:else}<div class="empty">{busy?'Loading stations…':'No stations in this group.'}</div>{/each}
+        {#each sections as [heading,list]}<section class="game">{#if heading}<h2>{heading}</h2>{/if}{#each list as station}<button class="station sidebar-station" class:active={activeKey===station.key} aria-current={activeKey===station.key?'true':undefined} onclick={()=>tune(station)}><span>{station.station}</span><small>{station.mode==='network'?'network':station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'broadcast'}</small></button>{/each}</section>{:else}<div class="empty">{busy?'Loading stations…':'No stations in this group.'}</div>{/each}
       </nav>
     </aside>
     <section class="deck">
@@ -185,7 +185,7 @@
           <p class="home-kicker">YOUR RADIO</p><h1>Choose a station</h1><p id="homeSummary">{stations.length} station{stations.length===1?'':'s'} available</p>
           <div id="homeStations">{#each stations as station}<button class="home-station" class:active={activeKey===station.key} onclick={()=>tune(station)}>
             {#if artworkUrl(config.logos[station.key])}<img src={artworkUrl(config.logos[station.key])} alt="" loading="lazy" decoding="async"/>{:else}<span class="home-icon">◉</span>{/if}
-            <span>{#if station.game}<small>{String(station.game)}</small>{/if}<strong>{station.station}</strong><em>{station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'Continuous broadcast'}</em></span>
+            <span>{#if station.game}<small>{String(station.game)}</small>{/if}<strong>{station.station}</strong><em>{station.mode==='network'?'Network streams':station.mode==='tracks'?`${station.tracks.length} track${station.tracks.length===1?'':'s'}`:'Continuous broadcast'}</em></span>
           </button>{:else}<p class="empty">{query?'No matching stations.':'No stations yet. Create one to get started.'}</p>{/each}</div>
         </section>
       {:else if view==='Player'&&active}

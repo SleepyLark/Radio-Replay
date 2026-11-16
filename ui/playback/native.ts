@@ -70,7 +70,7 @@ export class NativePlayback {
     if(this.disposed||value.generation!==this.generation||value.sequence<this.sequence)return;
     this.sequence=value.sequence;
     const track=this.order[value.index];
-    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:value.bumper?'Bumper':track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted,bumper:value.bumper===true});
+    this.emit({key:this.station?.key??'',station:this.station?.station??'',title:value.bumper?'Bumper':track?.name??(this.station?'Tuning…':''),path:value.path,playing:value.playing,loading:value.loading,seconds:value.seconds,duration:value.duration,volume:value.volume,muted:value.muted,bumper:value.bumper===true,network:this.station?.mode==='network'});
     if(!this.hasBumpers&&value.path&&value.path!==this.lastPath&&this.clock&&!value.loading){
       this.lastPath=value.path;
       this.clock.origin=this.now();
@@ -84,7 +84,7 @@ export class NativePlayback {
         this.notice(value.error,!value.loading&&!value.playing?'error':'warning');
       }
     }
-    if(track&&value.path===track.path&&value.duration>0&&!value.loading){
+    if(this.station?.mode!=='network'&&track&&value.path===track.path&&value.duration>0&&!value.loading){
       const signature=`${track.path}:${track.size}:${track.modified}`;
       if(!this.measured.has(signature)){
         this.measured.add(signature);
@@ -110,6 +110,12 @@ export class NativePlayback {
       const prepared=await this.rpc<PreparedStation>('native_prepare',{generation:this.generation,key:station.key,group});
       if(token!==this.token||this.disposed)return;
       for(const problem of prepared.problems)this.problems.set(`${problem.kind}:${problem.path}`,problem);
+      if(station.mode==='network'){
+        if(!prepared.tracks.length)throw new Error('No playable streams in this station.');
+        this.order=prepared.tracks;this.notice('');
+        const loaded=await this.rpc<NativeSnapshot>('native_load',{generation:this.generation,key:station.key,paths:this.order.map(t=>t.path),index:0,seconds:0,fade:0,bumperCount:0});
+        if(token===this.token&&!this.disposed)this.apply(loaded);return;
+      }
       const tracks=prepared.tracks.filter(track=>typeof track.duration==='number'&&track.duration>0);
       if(!tracks.length)throw new Error('No playable tracks in this station.');
       const requestedFade=fadeSeconds(station,settings);

@@ -188,19 +188,28 @@ pub async fn native_prepare(
         };
         current()?;
         let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+        let network = config
+            .custom
+            .iter()
+            .find(|s| s.key == key)
+            .and_then(|s| s.extra.get("mode"))
+            .and_then(|v| v.as_str())
+            == Some("network");
         let mut bumper_report = library::bumper_report(&config, &key);
         let mut report = library::playback_report_for_group(config, &key, group.as_deref())?;
         report.problems.append(&mut bumper_report.problems);
-        cache
-            .0
-            .lock()
-            .map_err(|e| e.to_string())?
-            .populate_durations(&mut report.tracks);
-        cache
-            .0
-            .lock()
-            .map_err(|e| e.to_string())?
-            .populate_durations(&mut bumper_report.tracks);
+        if !network {
+            cache
+                .0
+                .lock()
+                .map_err(|e| e.to_string())?
+                .populate_durations(&mut report.tracks);
+            cache
+                .0
+                .lock()
+                .map_err(|e| e.to_string())?
+                .populate_durations(&mut bumper_report.tracks);
+        }
         let mut playable = Vec::new();
         let mut prepared_bumpers = Vec::new();
         for (mut track, is_bumper) in report
@@ -210,6 +219,10 @@ pub async fn native_prepare(
             .chain(bumper_report.tracks.into_iter().map(|t| (t, true)))
         {
             current()?;
+            if network {
+                playable.push(track);
+                continue;
+            }
             if track.duration.is_none() {
                 track.duration = cache
                     .0
@@ -327,6 +340,12 @@ pub async fn native_load(
             .iter()
             .find(|s| s.key == key)
             .ok_or("Station unavailable")?;
+        let network = station.extra.get("mode").and_then(|v| v.as_str()) == Some("network");
+        if network && (bumper_count > 0 || seconds != 0.0 || fade.unwrap_or(0.0) != 0.0) {
+            return Err(
+                "Network stations do not support virtual seeking, crossfades or bumpers".into(),
+            );
+        }
         let settings = if bumper_count > 0 {
             radio_replay_core::bumpers::Settings::from_station(station)?
         } else {
@@ -353,6 +372,14 @@ pub async fn native_load(
                 return Err("Duplicate native playback path".into());
             }
             let track = super::saved_audio(&library, &key, &path)?;
+            if network {
+                if !station.tracks.iter().any(|t| t.path == path) {
+                    return Err("Stream is not saved in this station".into());
+                }
+                radio_replay_network::validate(&path)?;
+                approved.push(PathBuf::from(path));
+                continue;
+            }
             lengths.push(track.duration.unwrap_or(0.0));
             track.cache_signature.hash(&mut revision);
             let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -396,6 +423,7 @@ pub async fn native_load(
                 seconds,
                 fade: fade.unwrap_or(0.0),
                 bumpers,
+                network,
             },
         )
     })

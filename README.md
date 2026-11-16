@@ -49,7 +49,7 @@ listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md
 - Cache metadata and durations in SQLite for reuse across launches.
 - Inspect problematic files through dismissible notifications.
 
-Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. Local M3U/M3U8 playlist imports are supported. Network streams and network playlists are not enabled yet.
+Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. M3U/M3U8 imports support local audio or direct public HTTP(S) audio streams. See the [network playlist preview](docs/network-playlists.md) for setup, security controls, and current limits. Remote playlist fetching and direct URL input are not enabled.
 
 ## Getting started
 

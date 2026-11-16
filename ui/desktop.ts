@@ -16,6 +16,7 @@ export interface DesktopSnapshot {
   duration: number;
   volume: number;
   muted: boolean;
+  network?: boolean;
 }
 export type DesktopAction =
   | { type: 'toggle' | 'play' | 'pause' | 'previous' | 'next' | 'mute' }

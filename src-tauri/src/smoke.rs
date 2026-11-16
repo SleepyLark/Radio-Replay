@@ -170,9 +170,37 @@ pub fn native_smoke_report(
     phase: String,
     ok: bool,
     message: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if !active() {
         return Err("Native smoke is not active".into());
+    }
+    if phase == "networkEnabled" {
+        return Ok(window.label() == "main"
+            && std::env::var_os("RADIO_REPLAY_NETWORK_SMOKE_URL").is_some());
+    }
+    if phase == "prepareNetwork" && window.label() == "main" {
+        let url = radio_replay_network::validate(
+            &std::env::var("RADIO_REPLAY_NETWORK_SMOKE_URL")
+                .map_err(|_| "No network smoke URL supplied")?,
+        )?;
+        let library = app.state::<super::Library>();
+        let store = library.0.lock().map_err(|e| e.to_string())?;
+        let mut config = store.load()?;
+        let station = config
+            .custom
+            .iter_mut()
+            .find(|s| s.key == "a")
+            .ok_or("Fixture missing")?;
+        station.extra.insert("mode".into(), "network".into());
+        station
+            .extra
+            .insert("bumpers".into(), serde_json::Value::Null);
+        station.tracks = vec![Track {
+            path: url.to_string(),
+            name: "Public stream fixture".into(),
+            extra: serde_json::from_value(serde_json::json!({"source":"network"})).unwrap(),
+        }];
+        store.save(&config)?;
     }
     smoke
         .phases
@@ -181,7 +209,7 @@ pub fn native_smoke_report(
         .push(format!("{}: {phase}: {message}", window.label()));
     if !ok {
         report(&app, false, &message);
-        return Ok(());
+        return Ok(false);
     }
     if phase == "closeToTray" && window.label() == "main" {
         window.close().map_err(|e| e.to_string())?;
@@ -258,5 +286,5 @@ pub fn native_smoke_report(
             );
         }
     }
-    Ok(())
+    Ok(false)
 }

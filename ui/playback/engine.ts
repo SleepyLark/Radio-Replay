@@ -9,6 +9,7 @@ const MAX_BUFFERED_SECONDS = 600;
 
 export interface PlaybackState {
   bumper?: boolean;
+  network?: boolean;
   key: string;
   station: string;
   title: string;
@@ -337,6 +338,8 @@ export class Playback {
   }
   async tune(station: Station, settings: Record<string, unknown> = {}, context = 'all') {
     this.stop();
+    if(station.mode==='network'){this.emit({key:station.key,station:station.station,playing:false,loading:false,error:'Network stations require the native libmpv build.',network:true});return;}
+    this.emit({network:false});
     const token = this.token;
     const signal = this.controller.signal;
     this.wantPlay = true;

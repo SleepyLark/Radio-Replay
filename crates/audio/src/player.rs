@@ -41,6 +41,7 @@ pub struct Plan {
     pub seconds: f64,
     pub fade: f64,
     pub bumpers: Option<crate::programme::Bumpers>,
+    pub network: bool,
 }
 #[derive(Clone, Default)]
 pub struct Tuning {

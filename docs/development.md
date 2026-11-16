@@ -13,7 +13,7 @@ cargo test --workspace --locked
 cargo check -p radio-replay-desktop --features native-smoke --locked
 npm run setup:mpv
 $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
-cargo test -p radio-replay-audio --locked -- --ignored
+cargo test -p radio-replay-audio --locked -- --ignored --skip real_public_http_stream
 ```
 
 Browser integration uses installed Microsoft Edge. If it is missing, run

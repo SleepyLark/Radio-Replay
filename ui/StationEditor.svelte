@@ -11,7 +11,7 @@
   const initial=untrack(()=>({station,logo,settings}));
   const key=initial.station?.key??crypto.randomUUID();
   let name=$state(initial.station?.station??'');
-  let mode=$state(initial.station?.mode==='tracks'?'tracks':initial.station?'longset':'tracks');
+  let mode=$state(initial.station?.mode==='network'?'network':initial.station?.mode==='tracks'?'tracks':initial.station?'longset':'tracks');
   let tracks=$state.raw<Track[]>(initial.station?[...initial.station.tracks]:[]);
   let logoPath=$state(typeof initial.logo==='string'?initial.logo:'');
   let bannerPath=$state(String(initial.station?.bannerPath??'')), bannerAccent=$state(String(initial.station?.bannerAccent??''));
@@ -26,6 +26,7 @@
   let bumperEnabled=$state(originalBumpers?.enabled===true), bumperFolder=$state(originalBumpers?.folder??'');
   let bumperMethod=$state<'songs'|'time'>(originalBumpers?.method==='time'?'time':'songs');
   let bumperMin=$state<number|undefined>(originalBumpers?.min??2), bumperMax=$state<number|undefined>(originalBumpers?.max??5);
+  const invalidSources=$derived(tracks.some(t=>(/^https?:\/\//i.test(t.path))!==(mode==='network')));
   const invalidBumperRange=$derived(bumperMin==null||bumperMax==null||!Number.isFinite(bumperMin)||!Number.isFinite(bumperMax)||bumperMin>bumperMax||bumperMin<(bumperMethod==='songs'?1:.1)||bumperMax>(bumperMethod==='songs'?1000:360)||bumperMethod==='songs'&&(!Number.isInteger(bumperMin)||!Number.isInteger(bumperMax)));
   const invalidBumpers=$derived(mode==='tracks'&&bumperEnabled&&(!bumperFolder||invalidBumperRange));
   const preview=$derived({key,station:name,mode,tracks,bannerPath,bannerColor:useColor?bannerColor:'',spinLogo});
@@ -36,6 +37,8 @@
   async function add(folder:boolean){await perform(async()=>merge(await chooseAudio(folder)));}
   async function importPlaylist(){await perform(async()=>{
     const report=await choosePlaylist();if(!report)return;
+    if(report.tracks.length&&tracks.length&&(mode==='network')!==(report.network===true))throw new Error('Local files and network streams need separate stations.');
+    if(report.tracks.length&&!tracks.length)mode=report.network?'network':mode==='network'?'tracks':mode;
     const previous=tracks.length;merge(report.tracks);
     playlistAdded=tracks.length-previous;playlistDuplicates=report.tracks.length-playlistAdded;playlistReport=report;
     if(!name.trim())name=report.name;
@@ -52,15 +55,16 @@
   <fieldset disabled={busy}>
     <details class="editor-section" open><summary>Essentials</summary>
       <label>Station name<input required maxlength="200" bind:value={name} placeholder="Your station name"/></label>
-      <p>Playback style</p><div class="preset-actions"><button type="button" aria-pressed={mode==='tracks'} onclick={()=>mode='tracks'}>Music station</button><button type="button" aria-pressed={mode==='longset'} onclick={()=>mode='longset'}>Radio broadcast</button></div>
-      <p id="playbackHelp">{mode==='tracks'?'Files play in a shuffled order. Timestamps supply lyrics by default.':'Recordings play in order. Timestamps supply track titles by default.'}</p>
-      <div class="file-actions"><button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button><button type="button" onclick={importPlaylist}>Import playlist</button></div>
-      <p>Import local .m3u / .m3u8 files. Music stations shuffle; Radio broadcasts follow the imported order.</p>
+      <p>Playback style</p><div class="preset-actions"><button type="button" aria-pressed={mode==='tracks'} onclick={()=>mode='tracks'}>Music station</button><button type="button" aria-pressed={mode==='longset'} onclick={()=>mode='longset'}>Radio broadcast</button><button type="button" aria-pressed={mode==='network'} onclick={()=>mode='network'}>Network station</button></div>
+      <p id="playbackHelp">{mode==='network'?'HTTP(S) audio streams play in playlist order. Connections begin when you tune in. Private-network addresses, nested playlists and HLS are blocked.':mode==='tracks'?'Files play in a shuffled order. Timestamps supply lyrics by default.':'Recordings play in order. Timestamps supply track titles by default.'}</p>
+      <div class="file-actions">{#if mode!=='network'}<button type="button" onclick={()=>add(false)}>Add files</button><button type="button" onclick={()=>add(true)}>Add folder</button>{/if}<button type="button" onclick={importPlaylist}>Import playlist</button></div>
+      <p>Import an .m3u / .m3u8 playlist of local files or HTTP(S) streams. Music stations shuffle; other styles follow playlist order.</p>
       {#if playlistReport}<div class="playlist-report" role="status"><p>{playlistAdded} file{playlistAdded===1?'':'s'} added from “{playlistReport.name}”.{#if playlistDuplicates}{' '}{playlistDuplicates} already in this station.{/if}</p>
         {#if playlistReport.issueCount}<details><summary>{playlistReport.issueCount} import notice{playlistReport.issueCount===1?'':'s'} — view details</summary><ul>{#each playlistReport.issues as issue}<li>{#if issue.line}Line {issue.line}:{' '}{/if}<code>{issue.entry}</code> — {issue.reason}</li>{/each}</ul>{#if playlistReport.issueCount>playlistReport.issues.length}<p>Showing the first {playlistReport.issues.length} notices.</p>{/if}</details>{/if}
         <button type="button" onclick={()=>playlistReport=null}>Dismiss import report</button></div>{/if}
+      {#if invalidSources}<p role="status">Network entries require Network station playback. Keep local files in a separate station.</p>{/if}
       <p>{tracks.length} file{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
-      <FileList {tracks} reorder={mode==='longset'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
+      <FileList {tracks} reorder={mode!=='tracks'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
     </details>
     {#if mode==='tracks'}
     <details class="editor-section" open={bumperEnabled}><summary>Bumpers</summary>
@@ -81,12 +85,12 @@
       <div class="editor-section"><strong>Station banner</strong><p>Use an image or color across the radio display behind the station name.</p><p>{bannerPath||'No banner image'}</p><div class="file-actions"><button type="button" onclick={banner}>Choose banner image</button><button type="button" disabled={!bannerPath} onclick={()=>{bannerPath='';bannerAccent='';}}>Remove image</button></div><label class="editor-check"><input type="checkbox" bind:checked={useColor}/>Use a banner color</label><label class="inline-color">Banner color<input type="color" bind:value={bannerColor} disabled={!useColor}/></label></div>
       <label class="editor-check"><input type="checkbox" bind:checked={useAccent}/>Override player accent</label><label class="inline-color">Station accent<input type="color" bind:value={accent} disabled={!useAccent}/></label><p>Unchecked: follows Settings → Appearance.</p>
     </details>
-    <details class="editor-section"><summary>Advanced</summary><label>Use timestamped text as<select bind:value={textMode}><option value="auto">Default from playback style</option><option value="titles">Track titles</option><option value="lyrics">Lyrics</option><option value="ignore">Ignore sidecars</option></select></label><p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p><label class="editor-check"><input type="checkbox" bind:checked={customFade}/>Override station crossfade</label>{#if customFade}<label class="inline-number">Station crossfade<input type="number" min="0" max="30000" step="100" required bind:value={fade}/> ms</label>{/if}</details>
+    {#if mode!=='network'}<details class="editor-section"><summary>Advanced</summary><label>Use timestamped text as<select bind:value={textMode}><option value="auto">Default from playback style</option><option value="titles">Track titles</option><option value="lyrics">Lyrics</option><option value="ignore">Ignore sidecars</option></select></label><p>Only text with valid timestamps is displayed. Untimed notes stay out of the player.</p><label class="editor-check"><input type="checkbox" bind:checked={customFade}/>Override station crossfade</label>{#if customFade}<label class="inline-number">Station crossfade<input type="number" min="0" max="30000" step="100" required bind:value={fade}/> ms</label>{/if}</details>{/if}
     {#if station}<button type="button" class="danger" onclick={()=>confirmDelete=true}>Delete station</button>{/if}
     {#if confirmDelete}<p class="error">Remove this station? Audio and artwork files stay on disk.</p><button type="button" class="danger" onclick={()=>perform(async()=>onsaved(await deleteStation(key)))}>Delete station permanently</button>{/if}
   </fieldset>
   {#if error}<p class="error" role="alert">{error}</p>{/if}{#if busy}<p role="status">Working…</p>{/if}
-  {#snippet footer()}<button type="button" disabled={busy} onclick={oncancel}>Cancel</button><button type="submit" class="primary" disabled={busy||!name.trim()||!tracks.length||invalidBumpers}>Save station</button>{/snippet}
+  {#snippet footer()}<button type="button" disabled={busy} onclick={oncancel}>Cancel</button><button type="submit" class="primary" disabled={busy||!name.trim()||!tracks.length||invalidBumpers||invalidSources}>Save station</button>{/snippet}
 </Dialog>
 
 <style>

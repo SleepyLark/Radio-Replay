@@ -295,6 +295,17 @@ const server = http.createServer((req, res) => {
         button('Import playlist').click();await until(()=>document.querySelector('.playlist-report'),'New station playlist missing');
         assert(document.querySelector('dialog input').value==='Imported playlist','New station did not inherit playlist name');
         button('Cancel').click();await until(()=>!document.querySelector('dialog'),'New station cancel failed');
+        await wait(50);button('＋ CREATE STATION').click();await until(()=>document.querySelector('dialog')?.open,'Network editor missing');
+        window.__testPlaylist({name:'Network fixture',network:true,tracks:[{path:'https://radio.example.org/one.mp3',name:'Song One',source:'network'},{path:'https://radio.example.org/live',name:'Live',source:'network'}],issues:[],issueCount:0});
+        button('Import playlist').click();await until(()=>document.querySelector('.playlist-report'),'Network import missing');
+        assert(button('Network station').getAttribute('aria-pressed')==='true','Network import did not select network mode');
+        assert(document.querySelector('dialog input').value==='Network fixture','Network station name missing');
+        assert(!button('Add files')&&!button('Add folder'),'Network station offers local file mixing');
+        assert(![...document.querySelectorAll('dialog summary')].some(s=>s.textContent==='Bumpers'||s.textContent==='Advanced'),'Network station offers unsupported local-only controls');
+        assert(!button('Save station').disabled,'Valid network station cannot be saved');
+        button('Music station').click();await wait(20);assert(button('Save station').disabled,'Network URLs allowed in local playback mode');
+        button('Network station').click();await wait(20);button('Cancel').click();await until(()=>!document.querySelector('dialog'),'Network cancel failed');
+        window.__testPlaylist(undefined);
         return 'Local playlist UI passed: import, preserved mode/order, duplicates, skipped entries, cancel, error, retry, dismissal and save.';
       }));
       const problemsPage=await browser.newPage({viewport:{width:1200,height:800}});

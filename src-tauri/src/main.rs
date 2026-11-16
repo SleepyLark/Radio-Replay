@@ -51,6 +51,15 @@ async fn track_details(
     path: String,
 ) -> Result<metadata::Details, String> {
     let track = saved_audio(&library, &key, &path)?;
+    if track.track.extra.get("source").and_then(|v| v.as_str()) == Some("network") {
+        return Ok(metadata::Details {
+            tags: metadata::Metadata {
+                title: track.track.name.clone(),
+                ..Default::default()
+            },
+            sidecar: None,
+        });
+    }
     let path = Path::new(&track.track.path);
     let tags = cache.0.lock().map_err(|e| e.to_string())?.read(path);
     Ok(metadata::Details {

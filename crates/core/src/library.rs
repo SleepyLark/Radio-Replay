@@ -64,6 +64,34 @@ fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String
         .iter()
         .find(|s| s.key == key)
         .ok_or("Station no longer exists")?;
+    if station.extra.get("mode").and_then(|v| v.as_str()) == Some("network") {
+        if station.tracks.len() > 1000 {
+            return Err("Network stations are limited to 1,000 streams".into());
+        }
+        let mut report = report_tracks(&[]);
+        for track in &station.tracks {
+            match radio_replay_network::validate(&track.path) {
+                Ok(_) => {
+                    let mut track = track.clone();
+                    track.extra.insert("source".into(), "network".into());
+                    report.tracks.push(PlayableTrack {
+                        track,
+                        duration: None,
+                        size: 0,
+                        modified: 0,
+                        cache_signature: None,
+                    })
+                }
+                Err(reason) => report.problems.push(TrackProblem {
+                    path: track.path.clone(),
+                    name: track.name.clone(),
+                    reason,
+                    kind: "file",
+                }),
+            }
+        }
+        return Ok(report);
+    }
     Ok(report_tracks(&station.tracks))
 }
 pub fn report_tracks(tracks: &[Track]) -> PreparedStation {
@@ -351,11 +379,14 @@ pub fn upsert(
     if edit.key.trim().is_empty() || edit.name.trim().is_empty() {
         return Err("Station name is required".into());
     }
-    if !matches!(edit.mode.as_str(), "tracks" | "longset") {
+    if !matches!(edit.mode.as_str(), "tracks" | "longset" | "network") {
         return Err("Invalid playback mode".into());
     }
     if edit.tracks.is_empty() {
         return Err("Add at least one audio file".into());
+    }
+    if edit.mode == "network" && edit.tracks.len() > 1000 {
+        return Err("Network stations are limited to 1,000 streams".into());
     }
     for (key, value) in &edit.options {
         let valid = match key.as_str() {
@@ -446,7 +477,14 @@ pub fn upsert(
         .unwrap_or_default();
     for track in &edit.tracks {
         let retained = previous_paths.contains(track.path.as_str());
-        if (!retained && !audio.contains(&track.path)) || !audio_file(Path::new(&track.path)) {
+        let valid_source = if edit.mode == "network" {
+            radio_replay_network::validate(&track.path).is_ok()
+        } else {
+            audio_file(Path::new(&track.path))
+                && !track.path.starts_with("http:")
+                && !track.path.starts_with("https:")
+        };
+        if (!retained && !audio.contains(&track.path)) || !valid_source {
             return Err("Audio file was not selected".into());
         }
         if !seen.insert(&track.path) {

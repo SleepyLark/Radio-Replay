@@ -58,6 +58,8 @@ uses the explicit playlist picker, not drag-and-drop or OS file associations.
 
 ## Scope and limits
 
+For the subsequent network implementation, see [network playlist preview](network-playlists.md). The local-only scope below describes phase 1.
+
 No HTTP/HTTPS playlists, URL fetching, network-stream playback, direct URL input,
 HLS playback, new audio formats, or playlist exporting are added. These remain
 separate phases requiring approval. Existing mounted/filesystem shares continue

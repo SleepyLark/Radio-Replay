@@ -1,8 +1,9 @@
 //! Small libmpv client boundary. Handles stay on their creating worker thread.
-//! Only local audio is accepted in this stage; network stations are a later mode.
+//! Local files stay local; network audio arrives through a guarded Rust byte stream.
 pub mod player;
 pub mod programme;
 mod runtime;
+mod stream;
 use libloading::Library;
 use std::{
     ffi::{c_char, c_int, c_ulong, c_void, CStr, CString},
@@ -54,6 +55,7 @@ pub struct Mpv {
     destroy: Destroy,
     error: ErrorString,
     free: Free,
+    _stream: Box<stream::Slot>,
     _library: Library,
     _thread: PhantomData<Rc<()>>,
 }
@@ -116,6 +118,7 @@ impl Mpv {
                 free: *library
                     .get::<Free>(b"mpv_free\0")
                     .map_err(|e| e.to_string())?,
+                _stream: Box::default(),
                 _library: library,
                 _thread: PhantomData,
             };
@@ -162,6 +165,22 @@ impl Mpv {
                 ))?;
             }
             mpv.check(initialize(mpv.handle))?;
+            let register = *mpv
+                ._library
+                .get::<unsafe extern "C" fn(
+                    Handle,
+                    *const c_char,
+                    *mut c_void,
+                    unsafe extern "C" fn(*mut c_void, *mut c_char, *mut stream::Info) -> c_int,
+                ) -> c_int>(b"mpv_stream_cb_add_ro\0")
+                .map_err(|e| e.to_string())?;
+            let slot = (&mut *mpv._stream as *mut stream::Slot).cast();
+            mpv.check(register(
+                mpv.handle,
+                string("rrnet")?.as_ptr(),
+                slot,
+                stream::open,
+            ))?;
             Ok(mpv)
         }
     }
@@ -203,9 +222,23 @@ impl Mpv {
             "flac" => "flac",
             _ => return Err("Unsupported local audio extension".into()),
         };
+        self.set("demuxer-lavf-o", "protocol_whitelist=file")?;
         // Force an audio demuxer so a disguised playlist cannot open references.
         self.set("demuxer-lavf-format", format)?;
         self.command(&["loadfile", &path.to_string_lossy(), "replace"])
+    }
+    pub fn load_network(&mut self, url: &str) -> Result<(), String> {
+        let uri = self._stream.prepare(url)?;
+        self.set("demuxer-lavf-format", "")?;
+        // Bytes arrive through custom AVIO. No nested protocol (even file) is allowed.
+        self.set(
+            "demuxer-lavf-o",
+            "protocol_whitelist=rrnet,format_whitelist=%24%mp3,aac,ogg,flac,wav,mov,enable_drefs=0",
+        )?;
+        self.command(&["loadfile", &uri, "replace"])
+    }
+    pub fn network_error(&self) -> String {
+        self._stream.error()
     }
     pub fn number(&self, name: &str) -> Option<f64> {
         let name = string(name).ok()?;
