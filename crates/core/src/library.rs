@@ -1,4 +1,23 @@
 use crate::{Config, Station, Track};
+mod indexed;
+pub use indexed::{validate_preparation, IndexedLineup, IndexedStation, IndexedTrack};
+mod request;
+mod scan;
+pub use request::PlaybackRequest;
+pub use scan::{collect_audio, scan_folder, ScanNotices, ScanReport};
+
+pub const MAX_STATION_TRACKS: usize = 100_000;
+pub const MAX_BUMPER_TRACKS: usize = 1_000;
+pub const MAX_NETWORK_STREAMS: usize = 1_000;
+pub fn validate_track_count(mode: &str, count: usize) -> Result<(), String> {
+    if mode == "network" && count > MAX_NETWORK_STREAMS {
+        return Err("Network stations are limited to 1,000 streams".into());
+    }
+    if count > MAX_STATION_TRACKS {
+        return Err("A station can hold up to 100,000 files".into());
+    }
+    Ok(())
+}
 use serde::Deserialize;
 use serde::Serialize;
 use std::{
@@ -59,17 +78,28 @@ pub fn playback_files(config: &Config, key: &str) -> Result<Vec<PlayableTrack>, 
     Ok(playback_report(config, key)?.tracks)
 }
 fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String> {
+    playback_report_selected(config, key, None)
+}
+fn playback_report_selected(
+    config: &Config,
+    key: &str,
+    paths: Option<&HashSet<&str>>,
+) -> Result<PreparedStation, String> {
     let station = config
         .custom
         .iter()
         .find(|s| s.key == key)
         .ok_or("Station no longer exists")?;
     if station.extra.get("mode").and_then(|v| v.as_str()) == Some("network") {
-        if station.tracks.len() > 1000 {
+        if station.tracks.len() > MAX_NETWORK_STREAMS {
             return Err("Network stations are limited to 1,000 streams".into());
         }
         let mut report = report_tracks(&[]);
-        for track in &station.tracks {
+        for track in station
+            .tracks
+            .iter()
+            .filter(|t| paths.is_none_or(|paths| paths.contains(t.path.as_str())))
+        {
             match radio_replay_network::validate(&track.path) {
                 Ok(_) => {
                     let mut track = track.clone();
@@ -92,9 +122,48 @@ fn playback_report(config: &Config, key: &str) -> Result<PreparedStation, String
         }
         return Ok(report);
     }
-    Ok(report_tracks(&station.tracks))
+    Ok(report_tracks_iter(station.tracks.iter().filter(|t| {
+        paths.is_none_or(|paths| paths.contains(t.path.as_str()))
+    })))
 }
 pub fn report_tracks(tracks: &[Track]) -> PreparedStation {
+    report_tracks_iter(tracks.iter())
+}
+fn report_tracks_iter<'a>(tracks: impl Iterator<Item = &'a Track>) -> PreparedStation {
+    let tracks: Vec<_> = tracks.collect();
+    let workers = if tracks.len() >= 1024 {
+        std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(4)
+    } else {
+        1
+    };
+    if workers == 1 {
+        return report_tracks_serial(tracks.into_iter());
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = tracks
+            .chunks(tracks.len().div_ceil(workers))
+            .map(|chunk| scope.spawn(move || report_tracks_serial(chunk.iter().copied())))
+            .collect();
+        let mut report = PreparedStation {
+            tracks: Vec::new(),
+            bumpers: Vec::new(),
+            problems: Vec::new(),
+        };
+        // Join in input order; completion order never reshuffles long broadcasts
+        // or their diagnostics. Every worker uses the same full identity checks.
+        for handle in handles {
+            let mut chunk = handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            report.tracks.append(&mut chunk.tracks);
+            report.problems.append(&mut chunk.problems);
+        }
+        report
+    })
+}
+fn report_tracks_serial<'a>(tracks: impl Iterator<Item = &'a Track>) -> PreparedStation {
     let mut files = Vec::new();
     let mut problems = Vec::new();
     for track in tracks {
@@ -151,6 +220,13 @@ pub fn report_tracks(tracks: &[Track]) -> PreparedStation {
     }
 }
 pub fn bumper_report(config: &Config, key: &str) -> PreparedStation {
+    bumper_report_with(config, key, scan_folder)
+}
+fn bumper_report_with(
+    config: &Config,
+    key: &str,
+    scan: impl FnOnce(&Path) -> Result<ScanReport, String>,
+) -> PreparedStation {
     let mut report = report_tracks(&[]);
     let result = (|| {
         let station = config
@@ -161,15 +237,31 @@ pub fn bumper_report(config: &Config, key: &str) -> PreparedStation {
         let Some(settings) = crate::bumpers::Settings::from_station(station)? else {
             return Ok(());
         };
-        let mut tracks = scan_folder(Path::new(&settings.folder))?;
-        if tracks.len() > 1000 {
+        let scan = scan(Path::new(&settings.folder))?;
+        let mut tracks = scan.tracks;
+        if tracks.len() > MAX_BUMPER_TRACKS {
             return Err("Bumper folders are limited to 1,000 audio files".to_string());
         }
         if tracks.is_empty() {
-            return Err("No supported audio clips in the bumper folder".into());
+            return Err(if scan.notices.count() > 0 {
+                format!(
+                    "No supported audio clips in the bumper folder. {}",
+                    scan.notices.summary()
+                )
+            } else {
+                "No supported audio clips in the bumper folder".into()
+            });
         }
         tracks.sort_by(|a, b| a.path.cmp(&b.path));
         report = report_tracks(&tracks);
+        if scan.notices.count() > 0 {
+            report.problems.push(TrackProblem {
+                path: settings.folder.clone(),
+                name: "Bumper folder".into(),
+                reason: scan.notices.summary(),
+                kind: "scan",
+            });
+        }
         Ok::<(), String>(())
     })();
     if let Err(reason) = result {
@@ -185,7 +277,7 @@ pub fn bumper_report(config: &Config, key: &str) -> PreparedStation {
                 .into(),
             name: "Bumper folder".into(),
             reason,
-            kind: "file",
+            kind: "scan",
         });
     }
     report
@@ -198,7 +290,14 @@ pub fn playback_files_for_group(
     Ok(playback_report_for_group(config, key, group)?.tracks)
 }
 pub fn playback_report_for_group(
-    mut config: Config,
+    config: Config,
+    key: &str,
+    group: Option<&str>,
+) -> Result<PreparedStation, String> {
+    playback_report_for_group_shared(&config, key, group)
+}
+pub fn playback_report_for_group_shared(
+    config: &Config,
     key: &str,
     group: Option<&str>,
 ) -> Result<PreparedStation, String> {
@@ -210,20 +309,18 @@ pub fn playback_report_for_group(
             .and_then(|g| g["members"].as_array())
             .ok_or("Group unavailable")?
             .iter()
-            .filter_map(|member| member.as_str().map(str::to_owned))
-            .collect::<HashSet<String>>();
-        let station = config
-            .custom
-            .iter_mut()
-            .find(|s| s.key == key)
-            .ok_or("Station unavailable")?;
+            .filter_map(|member| member.as_str())
+            .collect::<HashSet<&str>>();
         if !members.contains(key) {
-            station
-                .tracks
-                .retain(|t| members.contains(&format!("{key}|{}", t.path)));
+            let prefix = format!("{key}|");
+            let paths = members
+                .iter()
+                .filter_map(|member| member.strip_prefix(&prefix))
+                .collect();
+            return playback_report_selected(config, key, Some(&paths));
         }
     }
-    playback_report(&config, key)
+    playback_report(config, key)
 }
 pub fn track(path: PathBuf) -> Result<Track, String> {
     if !audio_file(&path) || !path.is_file() {
@@ -241,65 +338,16 @@ pub fn track(path: PathBuf) -> Result<Track, String> {
     })
 }
 
-/// Deterministic depth-first scan. Skip symlinks/junctions to avoid escaping the chosen tree.
-pub fn scan_folder(root: &Path) -> Result<Vec<Track>, String> {
-    fn visit(root: &Path, depth: usize, output: &mut Vec<Track>) -> Result<(), String> {
-        if depth > 64 {
-            return Err("Folder nesting exceeds 64 levels".into());
-        }
-        let mut entries = fs::read_dir(root)
-            .map_err(|e| format!("{}: {e}", root.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                if metadata.file_attributes() & 0x400 != 0 {
-                    continue;
-                }
-            }
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-            if metadata.is_dir() {
-                if matches!(
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .to_ascii_lowercase()
-                        .as_str(),
-                    "extra" | "extras"
-                ) {
-                    continue;
-                }
-                visit(&entry.path(), depth + 1, output)?;
-            } else if metadata.is_file() && audio_file(&entry.path()) {
-                if output.len() >= 50_000 {
-                    return Err("Choose a smaller folder (maximum 50,000 tracks)".into());
-                }
-                output.push(track(entry.path())?);
-            }
-        }
-        Ok(())
-    }
-    let mut tracks = Vec::new();
-    visit(root, 0, &mut tracks)?;
-    Ok(tracks)
-}
-
 /// Recover archive-era definitions without moving audio or overwriting existing stations.
-pub fn recover_legacy(config: &mut Config) -> Result<usize, String> {
+pub fn recover_legacy(config: &mut Config) -> Result<(usize, ScanNotices), String> {
     if config.root.is_empty() {
         return Err("This configuration has no legacy archive root".into());
     }
     let original = PathBuf::from(&config.root);
     let root = fs::canonicalize(&original).map_err(|e| e.to_string())?;
-    let tracks = scan_folder(&root)?;
+    let scan = scan_folder(&root)?;
     let mut stations: std::collections::BTreeMap<String, Station> = Default::default();
-    for mut track in tracks {
+    for mut track in scan.tracks {
         let relative = Path::new(&track.path)
             .strip_prefix(&root)
             .map_err(|e| e.to_string())?;
@@ -355,7 +403,7 @@ pub fn recover_legacy(config: &mut Config) -> Result<usize, String> {
         config.custom.push(station);
         added += 1;
     }
-    Ok(added)
+    Ok((added, scan.notices))
 }
 
 #[derive(Deserialize)]
@@ -376,18 +424,15 @@ pub fn upsert(
     audio: &HashSet<String>,
     images: &HashSet<String>,
 ) -> Result<(), String> {
-    if edit.key.trim().is_empty() || edit.name.trim().is_empty() {
-        return Err("Station name is required".into());
-    }
+    crate::validation::identifier(&edit.key, "Station identifier")?;
+    crate::validation::name(&edit.name, "Station name")?;
     if !matches!(edit.mode.as_str(), "tracks" | "longset" | "network") {
         return Err("Invalid playback mode".into());
     }
     if edit.tracks.is_empty() {
         return Err("Add at least one audio file".into());
     }
-    if edit.mode == "network" && edit.tracks.len() > 1000 {
-        return Err("Network stations are limited to 1,000 streams".into());
-    }
+    validate_track_count(&edit.mode, edit.tracks.len())?;
     for (key, value) in &edit.options {
         let valid = match key.as_str() {
             "bumpers" => {
@@ -413,13 +458,7 @@ pub fn upsert(
                     false
                 }
             }
-            "crossfade" => {
-                value.is_null()
-                    || value
-                        .as_f64()
-                        .map(|n| n == 0.0 || (100.0..=30000.0).contains(&n))
-                        .unwrap_or(false)
-            }
+            "crossfade" => value.is_null() || crate::validation::crossfade(value),
             "textMode" => matches!(
                 value.as_str(),
                 Some("auto" | "titles" | "lyrics" | "ignore")
@@ -427,12 +466,7 @@ pub fn upsert(
             "spinLogo" => value.is_boolean(),
             "accent" | "bannerColor" | "bannerAccent" => value
                 .as_str()
-                .map(|s| {
-                    s.is_empty()
-                        || (s.len() == 7
-                            && s.starts_with('#')
-                            && s[1..].bytes().all(|b| b.is_ascii_hexdigit()))
-                })
+                .map(|s| crate::validation::color(s, true))
                 .unwrap_or(false),
             "bannerPath" => value
                 .as_str()
@@ -497,16 +531,16 @@ pub fn upsert(
             return Err("Artwork was not selected".into());
         }
     }
-    let mut station = existing
-        .map(|i| config.custom[i].clone())
-        .unwrap_or(Station {
-            key: edit.key.clone(),
-            station: String::new(),
-            tracks: vec![],
-            extra: Default::default(),
-        });
-    station.station = edit.name.trim().into();
-    station.tracks = edit.tracks;
+    // All validation above is complete. Retain extensions without cloning the
+    // old track list just before replacing it with the editor's list.
+    let mut station = Station {
+        key: edit.key.clone(),
+        station: edit.name.trim().into(),
+        tracks: edit.tracks,
+        extra: existing
+            .map(|i| std::mem::take(&mut config.custom[i].extra))
+            .unwrap_or_default(),
+    };
     station.extra.insert("mode".into(), edit.mode.into());
     station.extra.insert("custom".into(), true.into());
     station.extra.extend(edit.options);
@@ -531,32 +565,6 @@ pub fn upsert(
         }
     }
     Ok(())
-}
-
-pub fn collect_audio(paths: &[PathBuf]) -> Result<Vec<Track>, String> {
-    let mut result = Vec::new();
-    let mut seen = HashSet::new();
-    for path in paths {
-        let tracks = if path.is_dir() {
-            scan_folder(path)?
-        } else if audio_file(path) {
-            vec![track(path.clone())?]
-        } else {
-            continue;
-        };
-        for track in tracks {
-            if seen.insert(track.path.clone()) {
-                result.push(track);
-            }
-        }
-        if result.len() > 100_000 {
-            return Err("Too many audio files in this drop".into());
-        }
-    }
-    if result.is_empty() {
-        return Err("No supported audio files in this drop".into());
-    }
-    Ok(result)
 }
 
 /// Remove station entries only, including the last track. Audio files are never touched.
@@ -633,6 +641,119 @@ pub fn remove(config: &mut Config, key: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn parallel_inspection_preserves_order_diagnostics_and_canonical_file_identities() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        let audio = dir.path().join("audio.wav");
+        fs::write(&audio, b"fixture").unwrap();
+        let input: Vec<_> = (0..1100)
+            .map(|i| Track {
+                path: if i % 17 == 0 {
+                    dir.path().join(format!("missing-{i}.wav"))
+                } else {
+                    dir.path().join("folder/../audio.wav")
+                }
+                .to_string_lossy()
+                .into_owned(),
+                name: format!("Track {i}"),
+                extra: Default::default(),
+            })
+            .collect();
+        let original = input.clone();
+        let serial = report_tracks_serial(input.iter());
+        let parallel = report_tracks(&input);
+        assert_eq!(
+            serde_json::to_value(&serial).unwrap(),
+            serde_json::to_value(&parallel).unwrap()
+        );
+        let canonical = fs::canonicalize(&audio)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(parallel
+            .tracks
+            .iter()
+            .all(|t| t.track.path == canonical && t.cache_signature.is_some()));
+        assert_eq!(input, original);
+        let selected: Vec<_> = parallel.tracks.iter().collect();
+        assert!(IndexedLineup::verify_files(&selected, || true)
+            .unwrap()
+            .iter()
+            .all(|path| path.to_string_lossy() == canonical));
+        assert!(IndexedLineup::verify_files(&selected, || false)
+            .unwrap_err()
+            .contains("Tuning changed"));
+        let signature = parallel.tracks[0].cache_signature.clone();
+        fs::File::options()
+            .write(true)
+            .open(&audio)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_ne!(report_tracks(&input).tracks[0].cache_signature, signature);
+        assert!(IndexedLineup::verify_files(&selected, || true)
+            .unwrap_err()
+            .contains("Audio changed"));
+    }
+    #[test]
+    fn rejects_ambiguous_station_keys_before_grant_lookup() {
+        let mut config = Config::default();
+        let mut request = edit();
+        request.key = "new\0song.mp3".into();
+        assert!(
+            upsert(&mut config, request, &HashSet::new(), &HashSet::new())
+                .unwrap_err()
+                .contains("identifier")
+        );
+        assert!(config.custom.is_empty());
+        let mut request = edit();
+        request.name = "x".repeat(201);
+        assert!(
+            upsert(&mut config, request, &HashSet::new(), &HashSet::new())
+                .unwrap_err()
+                .contains("name")
+        );
+        assert!(config.custom.is_empty());
+    }
+    #[test]
+    fn track_limits_apply_before_edit_authorization_and_to_loaded_configs() {
+        assert!(validate_track_count("tracks", MAX_STATION_TRACKS).is_ok());
+        assert!(validate_track_count("network", MAX_NETWORK_STREAMS).is_ok());
+        assert!(validate_track_count("network", MAX_NETWORK_STREAMS + 1).is_err());
+        let mut request = edit();
+        request.tracks = vec![
+            Track {
+                path: "song.mp3".into(),
+                name: "Song".into(),
+                extra: Default::default()
+            };
+            MAX_STATION_TRACKS + 1
+        ];
+        let mut config = Config::default();
+        assert!(
+            upsert(&mut config, request, &HashSet::new(), &HashSet::new())
+                .unwrap_err()
+                .contains("100,000")
+        );
+        assert!(config.custom.is_empty());
+        config.custom.push(Station {
+            key: "s".into(),
+            station: "S".into(),
+            tracks: vec![
+                Track {
+                    path: "song.mp3".into(),
+                    name: "Song".into(),
+                    extra: Default::default()
+                };
+                MAX_STATION_TRACKS + 1
+            ],
+            extra: Default::default(),
+        });
+        assert!(config.validate().unwrap_err().contains("100,000"));
+        let bytes = serde_json::to_vec(&config).unwrap();
+        assert!(Config::parse(&bytes).unwrap_err().contains("100,000"));
+    }
+    #[test]
     fn large_retained_station_still_rejects_unselected_additions() {
         let tracks: Vec<_> = (0..20_000)
             .map(|i| Track {
@@ -690,7 +811,7 @@ mod tests {
         config
             .groups
             .push(serde_json::json!({"members":[member.clone()]}));
-        assert_eq!(recover_legacy(&mut config).unwrap(), 2);
+        assert_eq!(recover_legacy(&mut config).unwrap().0, 2);
         assert_eq!(
             config
                 .custom
@@ -719,7 +840,7 @@ mod tests {
             1
         );
         config.custom[0].station = "Edited".into();
-        assert_eq!(recover_legacy(&mut config).unwrap(), 0);
+        assert_eq!(recover_legacy(&mut config).unwrap().0, 0);
         assert_eq!(config.custom[0].station, "Edited");
     }
     #[test]
@@ -760,7 +881,9 @@ mod tests {
         for file in ["a.MP3", "b/z.flac", "ignored.txt"] {
             fs::write(dir.path().join(file), b"fixture").unwrap();
         }
-        let tracks = scan_folder(dir.path()).unwrap();
+        let report = scan_folder(dir.path()).unwrap();
+        assert_eq!(report.notices.count(), 0);
+        let tracks = report.tracks;
         assert_eq!(
             tracks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             ["a", "z"]
@@ -814,7 +937,9 @@ mod tests {
         fs::write(&audio, b"fixture").unwrap();
         let text = dir.path().join("notes.txt");
         fs::write(&text, b"notes").unwrap();
-        let tracks = collect_audio(&[dir.path().into(), audio, text.clone()]).unwrap();
+        let tracks = collect_audio(&[dir.path().into(), audio, text.clone()])
+            .unwrap()
+            .tracks;
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].name, "song");
         assert!(collect_audio(&[text]).is_err());
@@ -935,12 +1060,38 @@ mod tests {
         assert!(config.custom.is_empty());
     }
     #[test]
+    fn station_and_global_crossfade_edits_share_the_same_millisecond_range() {
+        for number in [-1.0, 0.0, 1.0, 20.0, 30.0, 99.0, 100.0, 30000.0, 30001.0] {
+            let mut station = Config::default();
+            let mut global = Config::default();
+            let value = serde_json::json!(number);
+            let mut request = edit();
+            request.options.insert("crossfade".into(), value.clone());
+            let station_result = upsert(
+                &mut station,
+                request,
+                &HashSet::from(["song.mp3".into()]),
+                &HashSet::new(),
+            );
+            let global_result = crate::preferences::save_settings(
+                &mut global,
+                serde_json::Map::from_iter([("crossfade".into(), value)]),
+            );
+            assert_eq!(station_result.is_ok(), global_result.is_ok(), "{number}");
+            assert_eq!(
+                global_result.is_ok(),
+                (0.0..=30000.0).contains(&number),
+                "{number}"
+            );
+        }
+    }
+    #[test]
     fn removing_problem_tracks_preserves_files_station_options_and_other_stations() {
         let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("keep-on-disk.wav");
         std::fs::write(&audio, b"audio fixture").unwrap();
         let path = audio.to_string_lossy().into_owned();
-        let mut config: Config=serde_json::from_value(serde_json::json!({"custom":[
+        let mut config: Config=serde_json::from_value(serde_json::json!({"schemaVersion":crate::SCHEMA_VERSION,"custom":[
             {"key":"a","station":"A","tracks":[{"path":path,"name":"Bad"},{"path":"good.wav","name":"Good"}],"mode":"tracks","accent":"#abcdef","bumpers":{"enabled":false}},
             {"key":"b","station":"B","tracks":[{"path":path,"name":"Other station"}]}],
             "groups":[{"id":"g","name":"G","members":["a",format!("a|{path}"),"a|good.wav",format!("b|{path}")]}],"logos":{"a":"art.png"}})).unwrap();

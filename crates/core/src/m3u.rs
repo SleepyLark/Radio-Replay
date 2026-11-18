@@ -240,6 +240,7 @@ fn import_filtered(path: &Path, network_only: bool) -> Result<Import, String> {
     Ok(report)
 }
 fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
+    crate::path_policy::validate_import(Path::new(entry))?;
     // C1 characters (U+0080–U+009F) can be part of valid Windows filenames,
     // including mojibake. Preserve those names exactly; reject ASCII controls.
     if entry.chars().any(|c| c.is_ascii_control()) {
@@ -263,6 +264,12 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
                 return Err("Unsupported playlist URL scheme; only local files and direct HTTP(S) audio are supported".into());
             }
             let url = url::Url::parse(entry).map_err(|_| "Invalid file URL")?;
+            if url
+                .host_str()
+                .is_some_and(|host| !host.eq_ignore_ascii_case("localhost"))
+            {
+                return Err("Network file URLs are not imported; use Add folder instead".into());
+            }
             if url.query().is_some() || url.fragment().is_some() {
                 return Err("File URLs with queries or fragments are unsupported; escape special filename characters".into());
             }
@@ -276,6 +283,7 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
             {
                 return Err("Invalid file path".into());
             }
+            crate::path_policy::validate_import(&local)?;
             return Ok(local);
         }
     }
@@ -284,6 +292,7 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
     #[cfg(not(windows))]
     let entry = &entry.replace('\\', "/");
     let path = base.join(entry);
+    crate::path_policy::validate_import(&path)?;
     if path.is_file() || Path::new(entry).is_absolute() {
         return Ok(path);
     }
@@ -297,12 +306,31 @@ fn resolve(base: &Path, entry: &str) -> Result<PathBuf, String> {
     if decoded.contains(':') && !drive {
         return Err("Invalid escaped local reference".into());
     }
-    Ok(base.join(decoded.as_ref()))
+    let path = base.join(decoded.as_ref());
+    crate::path_policy::validate_import(Path::new(decoded.as_ref()))?;
+    crate::path_policy::validate_import(&path)?;
+    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imported_paths_reject_network_devices_and_escaped_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        for entry in [
+            r"\\host\share\song.mp3",
+            "//host/share/song.mp3",
+            "file://host/share/song.mp3",
+            r"\\?\UNC\host\share\song.mp3",
+            r"\\.\pipe\song.mp3",
+            "%5c%5chost%5cshare%5csong.mp3",
+        ] {
+            let error = resolve(dir.path(), entry).unwrap_err();
+            assert!(error.contains("Network"), "{entry}: {error}");
+        }
+        assert!(resolve(Path::new(r"\\host\share"), "song.mp3").is_err());
+    }
     #[test]
     fn manual_links_use_network_policy_without_connecting() {
         let track = network_track(" https://radio.example.org:443/live ", " My Radio ").unwrap();

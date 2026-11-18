@@ -12,7 +12,7 @@ fn wait_for(mpv: &mut Mpv, expected: Event) -> Result<(), String> {
             return Ok(());
         }
         if let Event::Failed(error) = event {
-            return Err(error);
+            return Err(error.message);
         }
     }
     Err(format!("Timed out waiting for {expected:?}"))
@@ -106,7 +106,9 @@ fn main() -> Result<(), String> {
     let player = Player::start(library.into(), |_| {});
     player.control(Control::Volume(0.0))?;
     let first = player.begin()?;
-    let measured = player.probe(first.generation, file.clone())?;
+    let measured = player
+        .probe(first.generation, file.clone())
+        .map_err(|e| e.message)?;
     if (measured - 3.0).abs() > 0.1 {
         return Err("Worker probe duration mismatch".into());
     }

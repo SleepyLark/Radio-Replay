@@ -8,7 +8,7 @@ use std::{
         mpsc::{self, Sender, SyncSender},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -34,6 +34,50 @@ pub struct Snapshot {
     pub transition_progress: f64,
     pub bumper: bool,
 }
+// Decoder polling and fade gains retain their existing cadence. Only transport
+// of the continuously moving clock/fade progress is limited to four per second.
+fn publish_due(previous: &Snapshot, next: &Snapshot, elapsed: Duration) -> bool {
+    let Snapshot {
+        generation,
+        sequence: _,
+        index,
+        path,
+        seconds,
+        duration,
+        playing,
+        loading,
+        volume,
+        muted,
+        error,
+        error_path,
+        issue_revision,
+        tuning,
+        tuning_playing,
+        next_path,
+        transitioning,
+        transition_progress,
+        bumper,
+    } = next;
+    *generation != previous.generation
+        || *index != previous.index
+        || path != &previous.path
+        || *duration != previous.duration
+        || *playing != previous.playing
+        || *loading != previous.loading
+        || *volume != previous.volume
+        || *muted != previous.muted
+        || error != &previous.error
+        || error_path != &previous.error_path
+        || *issue_revision != previous.issue_revision
+        || *tuning != previous.tuning
+        || *tuning_playing != previous.tuning_playing
+        || next_path != &previous.next_path
+        || *transitioning != previous.transitioning
+        || *bumper != previous.bumper
+        || (elapsed >= Duration::from_millis(250)
+            && (*seconds != previous.seconds
+                || *transition_progress != previous.transition_progress))
+}
 #[derive(Clone)]
 pub struct Plan {
     pub paths: Vec<PathBuf>,
@@ -43,15 +87,207 @@ pub struct Plan {
     pub bumpers: Option<crate::programme::Bumpers>,
     pub network: bool,
 }
+impl Plan {
+    pub(crate) fn valid_size(&self) -> bool {
+        let music = self
+            .bumpers
+            .as_ref()
+            .map_or(self.paths.len(), |b| b.music_count);
+        !self.paths.is_empty()
+            && music > 0
+            && music <= crate::MAX_MUSIC_TRACKS
+            && self.paths.len() >= music
+            && self.paths.len() - music <= crate::MAX_BUMPER_TRACKS
+            && (!self.network || self.paths.len() <= crate::MAX_NETWORK_STREAMS)
+    }
+}
 #[derive(Clone, Default)]
 pub struct Tuning {
     pub sound: Option<PathBuf>,
     pub minimum: Duration,
     pub problem: Option<(String, String)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn startup_failure_is_reported_before_any_tune() {
+        let player = Player::start(PathBuf::from("missing-startup-runtime.dll"), |_| {});
+        assert!(player.control(Control::Status).is_err());
+        player.shutdown();
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; verifies restored levels before any tune"]
+    fn real_initial_levels_are_ready_before_any_tune() {
+        let library = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap();
+        let player = Player::start_with_preferences(library.into(), 0.37, true, |_| {});
+        let state = player.control(Control::Status).unwrap();
+        assert_eq!(state.volume, 0.37);
+        assert!(state.muted);
+        assert!(!state.playing);
+        assert_eq!(state.generation, 0);
+        let state = player.control(Control::Volume(0.6)).unwrap();
+        assert_eq!(state.volume, 0.6);
+        assert!(!state.muted);
+        player.shutdown();
+    }
+    #[test]
+    fn clock_and_fade_progress_are_limited_without_delaying_state_changes() {
+        let previous = Snapshot {
+            playing: true,
+            ..Default::default()
+        };
+        let mut next = previous.clone();
+        next.seconds = 0.1;
+        next.transition_progress = 0.5;
+        assert!(!publish_due(&previous, &next, Duration::from_millis(249)));
+        assert!(publish_due(&previous, &next, Duration::from_millis(250)));
+        next = previous.clone();
+        next.sequence += 1;
+        assert!(!publish_due(&previous, &next, Duration::from_secs(5)));
+        for change in [
+            |s: &mut Snapshot| s.playing = false,
+            |s: &mut Snapshot| s.loading = true,
+            |s: &mut Snapshot| s.generation += 1,
+            |s: &mut Snapshot| s.path = "next.wav".into(),
+            |s: &mut Snapshot| s.next_path = "preloaded.wav".into(),
+            |s: &mut Snapshot| s.transitioning = true,
+            |s: &mut Snapshot| s.bumper = true,
+            |s: &mut Snapshot| s.issue_revision += 1,
+            |s: &mut Snapshot| s.error = "Decoder failed".into(),
+            |s: &mut Snapshot| s.volume = 0.5,
+            |s: &mut Snapshot| s.muted = true,
+            |s: &mut Snapshot| s.tuning = true,
+        ] {
+            let mut next = previous.clone();
+            change(&mut next);
+            assert!(publish_due(&previous, &next, Duration::ZERO));
+        }
+        assert!(!publish_due(&previous, &previous, Duration::from_secs(5)));
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; measures real worker publication frequency"]
+    fn real_publication_frequency() {
+        use std::{sync::atomic::AtomicUsize, time::Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("silent.wav");
+        let data = 44100u32 * 2 * 30;
+        let mut wav = Vec::from(&b"RIFF"[..]);
+        wav.extend((data + 36).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(44100u32.to_le_bytes());
+        wav.extend(88200u32.to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(data.to_le_bytes());
+        wav.resize(44 + data as usize, 0);
+        std::fs::write(&path, wav).unwrap();
+        let events = Arc::new(AtomicUsize::new(0));
+        let counter = events.clone();
+        let player = Player::start(
+            std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap().into(),
+            move |_| {
+                counter.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        let generation = player.begin().unwrap().generation;
+        player
+            .load(
+                generation,
+                Plan {
+                    paths: vec![path],
+                    index: 0,
+                    seconds: 0.0,
+                    fade: 0.0,
+                    bumpers: None,
+                    network: false,
+                },
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !player.snapshot().unwrap().playing {
+            assert!(Instant::now() < deadline, "Playback did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        events.store(0, Ordering::Relaxed);
+        let start = Instant::now();
+        std::thread::sleep(Duration::from_secs(3));
+        let playing = events.swap(0, Ordering::Relaxed);
+        let elapsed = start.elapsed().as_secs_f64();
+        assert!(
+            playing <= 13,
+            "Clock publication exceeded four per second: {playing}"
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut previous = player.snapshot().unwrap();
+        loop {
+            std::thread::sleep(Duration::from_millis(20));
+            let next = player.snapshot().unwrap();
+            if next.sequence == previous.sequence && next.seconds > previous.seconds {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Suppressed clock polls did not refresh the shared snapshot"
+            );
+            previous = next;
+        }
+        player.control(Control::Pause).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        events.store(0, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_secs(1));
+        let paused = events.load(Ordering::Relaxed);
+        player.shutdown();
+        println!("PUBLICATION_BENCHMARK playing_events={playing} playing_seconds={elapsed:.3} playing_hz={:.2} paused_events={paused} paused_seconds=1", playing as f64 / elapsed);
+    }
+    #[test]
+    fn full_size_music_stations_leave_room_for_the_bumper_catalogue() {
+        let mut plan = Plan {
+            paths: vec![PathBuf::from("song.wav"); crate::MAX_PLAN_PATHS],
+            index: 0,
+            seconds: 0.0,
+            fade: 0.0,
+            network: false,
+            bumpers: Some(crate::programme::Bumpers {
+                music_count: crate::MAX_MUSIC_TRACKS,
+                lengths: vec![10.0; crate::MAX_PLAN_PATHS],
+                interval: crate::programme::Interval::Songs { min: 1, max: 1 },
+                seed: 1,
+                context: "s".into(),
+                revision: 0,
+            }),
+        };
+        assert!(plan.valid_size());
+        assert!(plan.bumpers.as_ref().unwrap().valid(plan.paths.len()));
+        plan.paths.push(PathBuf::from("extra.wav"));
+        assert!(!plan.valid_size());
+        plan.paths.pop();
+        plan.bumpers.as_mut().unwrap().music_count += 1;
+        assert!(!plan.valid_size());
+        plan.bumpers.as_mut().unwrap().music_count -= 2;
+        assert!(!plan.valid_size());
+        plan.bumpers = None;
+        plan.paths.truncate(crate::MAX_MUSIC_TRACKS);
+        assert!(plan.valid_size());
+        plan.paths.push(PathBuf::from("extra.wav"));
+        assert!(!plan.valid_size());
+        plan.network = true;
+        plan.paths.truncate(crate::MAX_NETWORK_STREAMS);
+        assert!(plan.valid_size());
+        plan.paths.push(PathBuf::from("extra.wav"));
+        assert!(!plan.valid_size());
+    }
+}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum Control {
+    Status,
     Play,
     Pause,
     Mute,
@@ -63,7 +299,7 @@ enum Message {
     Begin(u64, Tuning, Reply),
     Load(u64, Plan, Reply),
     Control(Control, Option<u64>, Reply),
-    Probe(u64, PathBuf, Sender<Result<f64, String>>),
+    Probe(u64, PathBuf, Sender<Result<f64, crate::Failure>>),
     Shutdown(Sender<()>),
 }
 #[derive(Clone)]
@@ -74,17 +310,36 @@ pub struct Player {
 }
 impl Player {
     pub fn start(library: PathBuf, publish: impl Fn(Snapshot) + Send + 'static) -> Self {
+        Self::start_with_preferences(library, 0.8, false, publish)
+    }
+    pub fn start_with_preferences(
+        library: PathBuf,
+        volume: f64,
+        muted: bool,
+        publish: impl Fn(Snapshot) + Send + 'static,
+    ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(32);
         let snapshot = Arc::new(Mutex::new(Snapshot {
-            volume: 0.8,
+            volume,
+            muted,
             ..Default::default()
         }));
         let generation = Arc::new(AtomicU64::new(0));
         let shared = snapshot.clone();
         let current = generation.clone();
         std::thread::spawn(move || {
-            let mut runtime = Runtime::open(library);
-            let mut previous = Snapshot::default();
+            let mut runtime = Runtime::open(library).and_then(|mut runtime| {
+                if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+                    return Err("Invalid initial audio volume".into());
+                }
+                runtime.control(Control::Volume(volume))?;
+                if muted {
+                    runtime.control(Control::Mute)?;
+                }
+                Ok(runtime)
+            });
+            let mut last_emitted = Snapshot::default();
+            let mut emitted_at = Instant::now();
             loop {
                 let interval = if runtime
                     .as_ref()
@@ -114,7 +369,7 @@ impl Player {
                                     let _ = reply.send(Err(error.clone()));
                                 }
                                 Message::Probe(_, _, reply) => {
-                                    let _ = reply.send(Err(error.clone()));
+                                    let _ = reply.send(Err(error.clone().into()));
                                 }
                                 Message::Shutdown(_) => unreachable!(),
                             }
@@ -163,12 +418,21 @@ impl Player {
                             }
                         }
                         runtime.poll(current.load(Ordering::SeqCst));
-                        if runtime.state != previous {
+                        // Commands acknowledge a fresh, ordered snapshot immediately.
+                        // Suppressed clock polls do not consume sequence numbers.
+                        let emit = pending.is_some()
+                            || publish_due(&last_emitted, &runtime.state, emitted_at.elapsed());
+                        if emit {
                             runtime.state.sequence += 1;
-                            previous = runtime.state.clone();
-                            if let Ok(mut value) = shared.lock() {
-                                *value = runtime.state.clone();
+                            last_emitted.clone_from(&runtime.state);
+                            emitted_at = Instant::now();
+                        }
+                        if let Ok(mut value) = shared.lock() {
+                            if *value != runtime.state {
+                                value.clone_from(&runtime.state);
                             }
+                        }
+                        if emit {
                             publish(runtime.state.clone());
                         }
                         if let Some((reply, result)) = pending {
@@ -246,11 +510,11 @@ impl Player {
         rx.recv_timeout(Duration::from_secs(12))
             .map_err(|e| e.to_string())?
     }
-    pub fn probe(&self, id: u64, path: PathBuf) -> Result<f64, String> {
+    pub fn probe(&self, id: u64, path: PathBuf) -> Result<f64, crate::Failure> {
         let (reply, rx) = mpsc::channel();
         self.send(Message::Probe(id, path, reply))?;
         rx.recv_timeout(Duration::from_secs(12))
-            .map_err(|e| e.to_string())?
+            .map_err(|e| crate::Failure::from(e.to_string()))?
     }
     pub fn shutdown(&self) {
         let (reply, rx) = mpsc::channel();

@@ -1,4 +1,4 @@
-use radio_replay_core::desktop::{visible, Action, Position, Snapshot};
+use radio_replay_core::desktop::{visible, Action, MediaPublication, Position, Snapshot};
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
 };
@@ -17,30 +17,66 @@ use tauri::{
 };
 
 pub struct Desktop {
+    #[cfg(feature = "native-smoke")]
+    publications: std::sync::atomic::AtomicU64,
+    #[cfg(feature = "native-smoke")]
+    media_updates: std::sync::atomic::AtomicU64,
+    #[cfg(feature = "native-smoke")]
+    media_failures: std::sync::atomic::AtomicU64,
     snapshot: Mutex<Snapshot>,
     media: Mutex<Option<MediaControls>>,
-    media_title: Mutex<String>,
+    media_publication: Mutex<MediaPublication>,
     tray_ready: AtomicBool,
+    close_to_tray: AtomicBool,
     quitting: AtomicBool,
     mini_creation: Mutex<()>,
 }
 impl Default for Desktop {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "native-smoke")]
+            publications: Default::default(),
+            #[cfg(feature = "native-smoke")]
+            media_updates: Default::default(),
+            #[cfg(feature = "native-smoke")]
+            media_failures: Default::default(),
             snapshot: Mutex::new(Snapshot {
                 volume: 0.8,
                 accent: "#c7f464".into(),
                 ..Default::default()
             }),
             media: Mutex::new(None),
-            media_title: Mutex::new(String::new()),
+            media_publication: Mutex::default(),
             tray_ready: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             mini_creation: Mutex::default(),
         }
     }
 }
+#[cfg(feature = "native-smoke")]
+pub fn smoke_publications(app: &tauri::AppHandle, reset: bool) -> serde_json::Value {
+    let state = app.state::<Desktop>();
+    let read = |counter: &std::sync::atomic::AtomicU64| {
+        if reset {
+            counter.swap(0, Ordering::Relaxed)
+        } else {
+            counter.load(Ordering::Relaxed)
+        }
+    };
+    serde_json::json!({"publications":read(&state.publications),"mediaUpdates":read(&state.media_updates),"mediaFailures":read(&state.media_failures)})
+}
 impl Desktop {
+    pub fn apply_settings(&self, config: &radio_replay_core::Config) {
+        self.close_to_tray.store(
+            config
+                .settings
+                .get("closeToTray")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            Ordering::Relaxed,
+        );
+    }
     #[cfg(feature = "native-smoke")]
     pub fn mark_quitting(&self) {
         self.quitting.store(true, Ordering::Relaxed);
@@ -185,7 +221,20 @@ fn open_mini(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 pub fn setup(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    app.manage(Desktop::default());
+    let desktop = Desktop::default();
+    let levels = app.state::<super::AudioPreferences>().get();
+    {
+        let mut snapshot = desktop.snapshot.lock().map_err(|e| e.to_string())?;
+        snapshot.volume = levels.volume;
+        snapshot.muted = levels.muted;
+    }
+    // An unreadable library is handled by recovery in the main window.
+    if let Ok(store) = app.state::<super::Library>().0.lock() {
+        if let Ok(config) = store.load_shared() {
+            desktop.apply_settings(&config);
+        }
+    }
+    app.manage(desktop);
     let show = MenuItem::with_id(app, "show", "Open Radio Replay", true, None::<&str>)?;
     let mini = MenuItem::with_id(app, "mini", "Mini player", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Play / pause", true, None::<&str>)?;
@@ -292,18 +341,9 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
             restore(app);
         } else if window.label() == "main" {
             api.prevent_close();
-            let close_to_tray = app
-                .try_state::<super::Library>()
-                .and_then(|library| library.0.lock().ok().and_then(|store| store.load().ok()))
-                .map(|config| {
-                    config
-                        .settings
-                        .get("closeToTray")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if close_to_tray && desktop.tray_ready.load(Ordering::Relaxed) {
+            if desktop.close_to_tray.load(Ordering::Relaxed)
+                && desktop.tray_ready.load(Ordering::Relaxed)
+            {
                 let _ = window.hide();
             } else {
                 quit(app);
@@ -312,7 +352,7 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn desktop_publish(
     window: WebviewWindow,
     app: tauri::AppHandle,
@@ -321,6 +361,15 @@ pub fn desktop_publish(
 ) -> Result<(), String> {
     main_only(&window)?;
     snapshot.validate()?;
+    #[cfg(not(feature = "native-audio"))]
+    if snapshot.audio_ready {
+        app.state::<super::AudioPreferences>().set(super::Levels {
+            volume: snapshot.volume,
+            muted: snapshot.muted,
+        })?;
+    }
+    #[cfg(feature = "native-smoke")]
+    desktop.publications.fetch_add(1, Ordering::Relaxed);
     *desktop.snapshot.lock().map_err(|e| e.to_string())? = snapshot.clone();
     if let Some(mini) = app.get_webview_window("mini") {
         if mini.is_visible().unwrap_or(false) || !show_windows() {
@@ -328,13 +377,12 @@ pub fn desktop_publish(
         }
     }
     if let Some(media) = desktop.media.lock().map_err(|e| e.to_string())?.as_mut() {
-        let identity = format!(
-            "{}\0{}\0{}\0{}",
-            snapshot.station, snapshot.title, snapshot.artist, snapshot.album
-        );
-        let mut previous = desktop.media_title.lock().map_err(|e| e.to_string())?;
-        if *previous != identity {
-            let _ = media.set_metadata(MediaMetadata {
+        let mut previous = desktop
+            .media_publication
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if previous.metadata_changed(&snapshot) {
+            let result = media.set_metadata(MediaMetadata {
                 title: Some(&snapshot.title),
                 artist: Some(if snapshot.artist.is_empty() {
                     &snapshot.station
@@ -345,18 +393,43 @@ pub fn desktop_publish(
                 duration: Some(Duration::from_secs_f64(snapshot.duration)),
                 ..Default::default()
             });
-            *previous = identity;
+            if result.is_ok() {
+                previous.metadata_sent(&snapshot);
+            }
+            #[cfg(feature = "native-smoke")]
+            if result.is_err() {
+                desktop.media_failures.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        let progress = Some(MediaPosition(Duration::from_secs_f64(snapshot.seconds)));
-        let _ = media.set_playback(if !snapshot.has_station {
-            MediaPlayback::Stopped
-        } else if snapshot.playing {
-            MediaPlayback::Playing { progress }
-        } else {
-            MediaPlayback::Paused { progress }
-        });
+        let now = std::time::Instant::now();
+        if previous.playback_due(&snapshot, now) {
+            let progress = Some(MediaPosition(Duration::from_secs_f64(snapshot.seconds)));
+            let result = media.set_playback(if !snapshot.has_station {
+                MediaPlayback::Stopped
+            } else if snapshot.playing {
+                MediaPlayback::Playing { progress }
+            } else {
+                MediaPlayback::Paused { progress }
+            });
+            if result.is_ok() {
+                previous.playback_sent(&snapshot, now);
+            }
+            #[cfg(feature = "native-smoke")]
+            {
+                desktop.media_updates.fetch_add(1, Ordering::Relaxed);
+                if result.is_err() {
+                    desktop.media_failures.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
         #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
-        let _ = media.set_volume(if snapshot.muted { 0.0 } else { snapshot.volume });
+        if previous.volume_changed(&snapshot)
+            && media
+                .set_volume(if snapshot.muted { 0.0 } else { snapshot.volume })
+                .is_ok()
+        {
+            previous.volume_sent(&snapshot);
+        }
     }
     Ok(())
 }

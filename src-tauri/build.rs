@@ -1,6 +1,9 @@
 fn main() {
-    let manifest = tauri_build::AppManifest::new().commands(&[
+    let commands: &'static [&'static str] = &[
         "load_config",
+        "library_recovery_info",
+        "recover_library",
+        "export_config",
         "playback_backend",
         "native_begin",
         "native_snapshot",
@@ -13,6 +16,7 @@ fn main() {
         "add_network_stream",
         "choose_bumper_folder",
         "choose_artwork",
+        #[cfg(not(feature = "native-audio"))]
         "prepare_station",
         "track_details",
         "remember_duration",
@@ -20,6 +24,7 @@ fn main() {
         "save_group",
         "delete_group",
         "save_settings",
+        #[cfg(not(feature = "native-audio"))]
         "resolve_tuning_sound",
         "recover_legacy_library",
         "save_station",
@@ -34,7 +39,8 @@ fn main() {
         "desktop_restore",
         "desktop_quit",
         "native_smoke_report",
-    ]);
+    ];
+    let manifest = tauri_build::AppManifest::new().commands(commands);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("Could not build desktop permissions");
 }

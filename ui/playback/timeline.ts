@@ -1,6 +1,6 @@
 import type { PlayableTrack, Station } from '../library';
-export interface Clock {
-  order: PlayableTrack[];
+export interface Clock<T=PlayableTrack> {
+  order: T[];
   lengths: number[];
   steps: number[];
   fade: number;
@@ -11,7 +11,7 @@ export interface Clock {
 export function fadeSeconds(station: Station, settings: Record<string, unknown>) {
   const value = station.crossfade ?? (station.mode === 'tracks' ? (settings.crossfade ?? 5000) : 0);
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.min(30000, Math.max(0, value > 0 && value <= 30 ? value * 1000 : value)) / 1000;
+  return Math.min(30000, Math.max(0, value)) / 1000;
 }
 export function shuffle<T>(values: T[], random = Math.random): T[] {
   const copy = [...values];
@@ -21,20 +21,20 @@ export function shuffle<T>(values: T[], random = Math.random): T[] {
   }
   return copy;
 }
-export function clockFor(
-  order: PlayableTrack[],
+export function clockFor<T>(
+  order: T[],
   lengths: number[],
   requestedFade: number,
   now: number,
   random = Math.random,
-): Clock {
+): Clock<T> {
   let fade = order.length > 1 ? requestedFade : 0;
   for (const length of lengths) fade = Math.min(fade, length / 2);
   const steps = lengths.map((n) => n - fade);
   const total = steps.reduce((a, b) => a + b, 0);
   return { order, lengths, steps, fade, total, origin: now, offset: random() * total };
 }
-export function position(clock: Clock, now: number) {
+export function position<T>(clock: Clock<T>, now: number) {
   let elapsed =
     (((clock.offset + (now - clock.origin) / 1000) % clock.total) + clock.total) % clock.total;
   for (let index = 0; index < clock.steps.length; index++) {

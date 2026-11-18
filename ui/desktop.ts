@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 export interface DesktopSnapshot {
   station: string;
+  trackId?: string;
   title: string;
   artist: string;
   album: string;
@@ -17,6 +18,7 @@ export interface DesktopSnapshot {
   volume: number;
   muted: boolean;
   network?: boolean;
+  audioReady?: boolean;
 }
 export type DesktopAction =
   | { type: 'toggle' | 'play' | 'pause' | 'previous' | 'next' | 'mute' }

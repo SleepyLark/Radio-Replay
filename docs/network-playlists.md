@@ -1,14 +1,12 @@
-# Network playlist preview
+# Network stations
 
-Branch: `codex/network-playlists`, based on main after local playlist support.
-The preview uses `com.local.radioreplay.network-preview` for separate application
-data. Restore the intended release identifier before merging/publishing.
+Network stations are available in the normal app. Existing experimental libraries
+remain in their original folders; see the [library import and data guide](../README.md#settings-and-saved-data)
+to bring a previous `stations.json` into the current app.
 
 ## Use it
 
 ```powershell
-cd C:\Users\Skylark\source\repos\Radio-Replay\.rewrite\network
-$env:CARGO_TARGET_DIR = (Resolve-Path ..\bumpers\target).Path
 npm run desktop
 ```
 
@@ -132,6 +130,6 @@ External decoder checks are deliberately separate from CI:
 ```powershell
 $env:RADIO_REPLAY_MPV_LIBRARY = Join-Path $PWD 'vendor/mpv/libmpv-2.dll'
 $env:RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT = '1'
-$env:RADIO_REPLAY_NETWORK_TEST_URL = 'https://nonstopcasiopea.radioca.st/;'
+$env:RADIO_REPLAY_NETWORK_TEST_URL = Read-Host 'Public audio test URL'
 cargo test -p radio-replay-audio real_public_http_stream --locked -- --ignored
 ```

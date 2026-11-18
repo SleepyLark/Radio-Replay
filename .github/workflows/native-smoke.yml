@@ -1,0 +1,43 @@
+name: Native integration
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 9 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: native-integration-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-integration
+      - run: npm ci
+      - name: Build and run isolated native integration
+        shell: pwsh
+        run: ./scripts/test-native.ps1 -Repeat -MissingRuntime -NullOutput
+      - name: Large-library regression budgets
+        run: cargo test -p radio-replay-core --locked large_library_budget -- --ignored --nocapture
+      - name: Upload reports and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-integration-${{ github.run_id }}
+          path: |
+            out/native-integration/**/summary.json
+            out/native-integration/**/*.report.json
+            out/native-integration/**/*.log
+          if-no-files-found: warn
+          retention-days: 14

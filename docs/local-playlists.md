@@ -1,18 +1,13 @@
-# Local playlist import (phase 1)
+# Playlist imports
 
-This preview lives on `codex/local-m3u`, based on main including the bumper work.
-Its application identifier is `com.local.radioreplay.playlists-preview`, so its
-library, preferences and metadata cache are separate from other builds. Restore
-main's intended release identifier before merging or packaging a normal release.
+Playlist import is available in the normal app and uses its established library.
+No feature worktree or alternate application identifier is needed.
 
 ## Try it
 
-From this worktree, run `npm run desktop`. To reuse the existing development
-Rust cache rather than create another one, use:
+Developers can launch from the repository root:
 
 ```powershell
-cd C:\Users\Skylark\source\repos\Radio-Replay\.rewrite\m3u
-$env:CARGO_TARGET_DIR = (Resolve-Path ..\bumpers\target).Path
 npm run desktop
 ```
 
@@ -23,15 +18,20 @@ Review the files and import report, then **Save station**. Cancelling the editor
 discards those changes. Importing does not start playback or overwrite the source
 playlist, and does not copy/move the audio files.
 
-The existing station playback choices still apply: **Music station** shuffles;
-**Radio broadcast** plays the saved file order. Import does not change that
-choice. An independent ordered-music playback style is outside this phase.
+For local files, **Music station** shuffles and **Radio broadcast** plays the saved
+file order. A network import into an empty station selects **Network station**.
+Local files and network links use separate stations; mixed-source entries are
+reported in the import notices. See the [network station guide](network-playlists.md).
 
 ## Compatibility
 
 - Plain and extended M3U, including a UTF-8 BOM and Windows line endings.
 - Relative file references resolved against the playlist's folder, absolute
   filesystem paths, and `file:` URLs appropriate to the current platform.
+- Imported documents cannot authorize UNC, mapped network drives, or device
+  paths. Those entries are skipped before media access; select NAS libraries
+  explicitly with **Add folder** instead. Library JSON imports with such
+  references are rejected without changing the existing library.
 - Percent-escaped relative URLs such as `Music/First%20Song.mp3`, as produced by
   VLC. An existing literal filename is preferred when it also contains `%`.
 - MP3, M4A, AAC, OGG, WAV and FLAC, using the existing audio engine and cache.
@@ -45,8 +45,8 @@ VLC's [playlist exporter](https://github.com/videolan/vlc/blob/master/modules/mi
 writes relative escaped references as well as full file URLs; this importer
 handles both without interpreting any VLC playback directives.
 
-The report lists missing/inaccessible files, unsupported files, duplicate entries,
-and network URLs by source line. Duplicate files retain their first occurrence,
+The report lists missing/inaccessible files, unsupported or mixed-source entries,
+and duplicates by source line. Duplicate files retain their first occurrence,
 matching the existing rule that each station contains a path once. Entries
 already in the station are also omitted and counted. Empty/all-invalid playlists
 add no files and remain reviewable; HLS manifests are rejected with a specific
@@ -58,12 +58,11 @@ uses the explicit playlist picker, not drag-and-drop or OS file associations.
 
 ## Scope and limits
 
-For the subsequent network implementation, see [network playlist preview](network-playlists.md). The local-only scope below describes phase 1.
-
-No HTTP/HTTPS playlists, URL fetching, network-stream playback, direct URL input,
-HLS playback, new audio formats, or playlist exporting are added. These remain
-separate phases requiring approval. Existing mounted/filesystem shares continue
-to behave as ordinary audio file paths; this is not streaming URL support.
+The picker reads a local playlist file. Direct public HTTP(S) audio links can be
+imported or entered manually in a network station, but fetching remote playlists,
+HLS playback and playlist exporting are not supported. Network filesystem paths
+inside imported documents are rejected; choose NAS files explicitly through the
+file/folder picker instead.
 
 A playlist is limited to 4 MiB and 50,000 entries. Import reports retain at most
 200 detailed notices while showing the full count. The Rust picker supplies the
@@ -74,6 +73,6 @@ expanded playback queues are created.
 
 Validation covers real temporary playlist files, Windows paths and file URLs,
 VLC-style references, encodings, titles/order, duplicates, mixed bad entries,
-stream/HLS rejection, size bounds, and station-save grants. Browser integration
+mixed-source handling, HLS rejection, size bounds, and station-save grants. Browser integration
 covers the editor's import/cancel/error/report/save flows; desktop compile checks
-include the new main-window capability. The native audio engine is unchanged.
+include the main-window capability and prepared-source authorization.

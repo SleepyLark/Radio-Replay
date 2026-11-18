@@ -1,9 +1,10 @@
 <script lang="ts">
   import {untrack} from 'svelte';
+  import type {LibraryUpdate} from './library-update';
   import Dialog from './Dialog.svelte';
   import GroupStation from './GroupStation.svelte';
   import {saveGroup, deleteGroup, type Config, type Group} from './library';
-  let {config,group,onsaved,oncancel}: {config: Config; group: Group|null; onsaved: (config:Config,id:string)=>void; oncancel:()=>void} = $props();
+  let {config,group,onsaved,oncancel}: {config: Config; group: Group|null; onsaved: (change:LibraryUpdate,id:string)=>void; oncancel:()=>void} = $props();
   const initial=untrack(()=>group);
   const id=initial?.id??crypto.randomUUID();
   let name=$state(initial?.name??'');

@@ -319,8 +319,9 @@ test('Electron timeline fixtures: random start, wrap and background wall-clock a
   assert.deepEqual(position(clock, 36000), { index: 0, seconds: 10 });
   assert.deepEqual(position(clock, 86000), { index: 0, seconds: 10 });
 });
-test('legacy fade units, broadcast defaults, half-track clamp, immutable shuffle', () => {
-  assert.equal(fadeSeconds({ mode: 'tracks' }, { crossfade: 5 }), 5);
+test('explicit millisecond fade units, broadcast defaults, half-track clamp, immutable shuffle', () => {
+  assert.equal(fadeSeconds({ mode: 'tracks' }, { crossfade: 5 }), .005);
+  assert.equal(fadeSeconds({ mode: 'tracks', crossfade: 20 }, { crossfade: 5000 }), .02);
   assert.equal(fadeSeconds({ mode: 'tracks', crossfade: 5000 }, {}), 5);
   assert.equal(fadeSeconds({ mode: 'longset' }, { crossfade: 5000 }), 0);
   assert.equal(clockFor([track('a'), track('b')], [2, 20], 5, 0, () => 0).fade, 1);

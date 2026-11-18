@@ -2,7 +2,7 @@
 use crate::{
     player::{Control, Plan, Snapshot, Tuning},
     programme::Cursor,
-    Event, Mpv,
+    Event, Failure, Mpv,
 };
 use std::{
     collections::{HashSet, VecDeque},
@@ -10,6 +10,10 @@ use std::{
     sync::mpsc::Sender,
     time::{Duration, Instant},
 };
+
+// Preparation margin beyond the fade window. Keep one silent auxiliary context;
+// increase this source constant when profiling unusually slow local/NAS storage.
+const PRELOAD_MARGIN: Duration = Duration::from_secs(10);
 
 enum Role {
     Idle,
@@ -22,6 +26,13 @@ enum Role {
         started: bool,
     },
 }
+fn auxiliary_load_timeout(role: &Role) -> Duration {
+    if matches!(role, Role::Next { .. }) {
+        PRELOAD_MARGIN + Duration::from_secs(5)
+    } else {
+        Duration::from_secs(8)
+    }
+}
 struct Auxiliary {
     mpv: Mpv,
     role: Role,
@@ -31,7 +42,7 @@ struct Auxiliary {
 struct Probe {
     generation: u64,
     deadline: Instant,
-    reply: Sender<Result<f64, String>>,
+    reply: Sender<Result<f64, Failure>>,
 }
 struct Fade {
     start: f64,
@@ -44,6 +55,10 @@ struct SavedProgramme {
     seconds: f64,
     anchor: Instant,
 }
+enum SeekState {
+    Requested,
+    Started,
+}
 pub(crate) struct Runtime {
     library: PathBuf,
     mpv: Mpv,
@@ -54,7 +69,10 @@ pub(crate) struct Runtime {
     blocked: HashSet<usize>,
     want_play: bool,
     ready: bool,
+    retry_load: bool,
     offset: f64,
+    seek_pending: Option<SeekState>,
+    seek_position: Option<f64>,
     minimum_until: Instant,
     load_started: Instant,
     fade: Option<Fade>,
@@ -94,7 +112,10 @@ impl Runtime {
             blocked: HashSet::new(),
             want_play: false,
             ready: false,
+            retry_load: false,
             offset: 0.0,
+            seek_pending: None,
+            seek_position: None,
             minimum_until: Instant::now(),
             load_started: Instant::now(),
             fade: None,
@@ -175,7 +196,7 @@ impl Runtime {
         self.state.error = error;
         self.state.issue_revision += 1;
     }
-    fn finish_probe(&mut self, result: Result<f64, String>) {
+    fn finish_probe(&mut self, result: Result<f64, Failure>) {
         if let Some(probe) = self.probe.take() {
             stop(&mut self.mpv);
             let _ = probe.reply.send(result);
@@ -203,6 +224,9 @@ impl Runtime {
         self.programme = None;
         self.state.bumper = false;
         self.ready = false;
+        self.retry_load = false;
+        self.seek_pending = None;
+        self.seek_position = None;
         self.want_play = false;
         self.state.loading = false;
         self.state.tuning = false;
@@ -260,11 +284,13 @@ impl Runtime {
                 aux.mpv.load_local(&path)
             })();
             if let Err(error) = result {
+                let failed_path = if self.auxiliary_failed {
+                    String::new()
+                } else {
+                    path.to_string_lossy().into_owned()
+                };
                 self.clear_auxiliary();
-                self.issue(
-                    path.to_string_lossy().into_owned(),
-                    format!("Tuning sound unavailable: {error}"),
-                );
+                self.issue(failed_path, format!("Tuning sound unavailable: {error}"));
             }
             self.volume()?;
         }
@@ -272,11 +298,11 @@ impl Runtime {
     }
     pub(crate) fn load_plan(&mut self, plan: Plan) -> Result<(), String> {
         if self.probe.is_some()
-            || plan.paths.is_empty()
-            || plan.paths.len() > 100000
+            || !plan.valid_size()
             || plan.index >= plan.paths.len()
             || plan.network
-                && (plan.fade != 0.0
+                && (plan.paths.len() > crate::MAX_NETWORK_STREAMS
+                    || plan.fade != 0.0
                     || plan.seconds != 0.0
                     || plan.bumpers.is_some()
                     || plan
@@ -323,6 +349,9 @@ impl Runtime {
         self.load()
     }
     fn load(&mut self) -> Result<(), String> {
+        self.retry_load = false;
+        self.seek_pending = None;
+        self.seek_position = None;
         self.state.bumper = self
             .plan
             .as_ref()
@@ -397,9 +426,19 @@ impl Runtime {
     }
     pub(crate) fn control(&mut self, control: Control) -> Result<(), String> {
         match control {
+            Control::Status => {}
             Control::Play => {
                 self.want_play = true;
-                self.paused(false)?;
+                if self.state.error_path.is_empty() && !self.state.error.is_empty() {
+                    self.issue(String::new(), String::new());
+                }
+                if self.retry_load {
+                    if let Err(error) = self.load() {
+                        self.fail(error);
+                    }
+                } else {
+                    self.paused(false)?;
+                }
             }
             Control::Pause => {
                 self.want_play = false;
@@ -430,7 +469,7 @@ impl Runtime {
         id: u64,
         current: u64,
         path: PathBuf,
-        reply: Sender<Result<f64, String>>,
+        reply: Sender<Result<f64, Failure>>,
     ) {
         let error = if id != current {
             Some("Tuning changed")
@@ -456,7 +495,7 @@ impl Runtime {
             self.mpv.load_local(&path)
         })();
         if let Err(error) = result {
-            self.finish_probe(Err(error));
+            self.finish_probe(Err(error.into()));
         }
     }
     fn poll_probe(&mut self, current: u64) {
@@ -532,6 +571,26 @@ impl Runtime {
             }
         }
     }
+    fn failure(&mut self, failure: Failure) {
+        if let Some(message) = failure.recovery_message() {
+            self.finish_probe(Err(failure.clone()));
+            if self.ready && !self.state.loading {
+                self.offset = self.state.seconds;
+            }
+            stop(&mut self.mpv);
+            self.clear_auxiliary();
+            self.ready = false;
+            self.seek_pending = None;
+            self.retry_load = self.plan.is_some();
+            self.want_play = false;
+            self.state.playing = false;
+            self.state.loading = false;
+            self.state.tuning = false;
+            self.issue(String::new(), message.into());
+        } else {
+            self.fail(failure.message);
+        }
+    }
     fn poll_auxiliary(&mut self) {
         let mut failure = None;
         let mut loaded = false;
@@ -551,7 +610,7 @@ impl Runtime {
                         break;
                     }
                     Event::Shutdown => {
-                        failure = Some("Secondary audio context stopped".into());
+                        failure = Some(Failure::from("Secondary audio context stopped"));
                         break;
                     }
                     Event::Ended if matches!(aux.role, Role::Next { started: false, .. }) => {
@@ -564,7 +623,7 @@ impl Runtime {
             if matches!(
                 aux.role,
                 Role::Static { ready: false } | Role::Next { ready: false, .. }
-            ) && aux.started.elapsed() > Duration::from_secs(8)
+            ) && aux.started.elapsed() > auxiliary_load_timeout(&aux.role)
             {
                 failure = Some("Secondary audio load timed out".into());
             }
@@ -573,7 +632,7 @@ impl Runtime {
                     .mpv
                     .set("pause", if self.want_play { "no" } else { "yes" })
                 {
-                    failure = Some(error);
+                    failure = Some(error.into());
                 }
             }
             self.state.tuning_playing = matches!(aux.role, Role::Static { ready: true })
@@ -581,13 +640,17 @@ impl Runtime {
                 && !aux.mpv.flag("idle-active").unwrap_or(true);
         }
         if let Some(error) = failure {
+            if error.recovery_message().is_some() {
+                self.failure(error);
+                return;
+            }
             let aux = self.auxiliary.as_ref().unwrap();
             let path = aux.path.clone();
             if let Role::Next { index, .. } = aux.role {
                 self.blocked.insert(index);
             }
             self.clear_auxiliary();
-            self.issue(path, error);
+            self.issue(path, error.message);
             let _ = self.volume();
         }
     }
@@ -627,7 +690,7 @@ impl Runtime {
             return Ok(());
         };
         let plan = self.plan.as_ref().unwrap();
-        let lead = self.fade_between(self.state.index, index) + 3.0;
+        let lead = self.fade_between(self.state.index, index) + PRELOAD_MARGIN.as_secs_f64();
         if self.state.duration - self.state.seconds > lead {
             return Ok(());
         }
@@ -648,14 +711,14 @@ impl Runtime {
         })();
         if let Err(error) = result {
             // Context initialization failure falls back to current-only playback.
-            if !self.auxiliary_failed {
+            let failed_path = if self.auxiliary_failed {
+                String::new()
+            } else {
                 self.blocked.insert(index);
-            }
+                path.to_string_lossy().into_owned()
+            };
             self.clear_auxiliary();
-            self.issue(
-                path.to_string_lossy().into_owned(),
-                format!("Could not preload audio: {error}"),
-            );
+            self.issue(failed_path, format!("Could not preload audio: {error}"));
         } else {
             self.state.next_path = path.to_string_lossy().into_owned();
         }
@@ -766,7 +829,21 @@ impl Runtime {
         self.load()
     }
     fn read_position(&mut self) {
-        self.state.seconds = self.mpv.number("time-pos").unwrap_or(0.0).max(0.0);
+        let observed = self.mpv.number("time-pos");
+        self.state.seconds = if let Some(target) = self.seek_position {
+            if observed.is_some_and(|seconds| seconds >= target - 0.005 && seconds <= target + 0.25)
+            {
+                self.seek_position = None;
+                observed.unwrap().max(0.0)
+            } else {
+                // The audio output clock can retain the previous file's position,
+                // especially when the new recording starts paused. The completed
+                // seek target is authoritative until the output clock catches up.
+                target
+            }
+        } else {
+            observed.unwrap_or(0.0).max(0.0)
+        };
         self.state.duration = self.mpv.number("duration").unwrap_or(0.0).max(0.0);
         self.state.playing = self.want_play
             && !self.state.loading
@@ -775,6 +852,9 @@ impl Runtime {
     }
     pub(crate) fn poll(&mut self, current: u64) {
         self.poll_auxiliary();
+        if self.retry_load {
+            return;
+        }
         if self.probe.is_some() {
             self.poll_probe(current);
             return;
@@ -783,7 +863,9 @@ impl Runtime {
             match self.mpv.event(0.0) {
                 Event::None => break,
                 Event::Loaded if self.plan.is_some() => {
-                    let result = if self.offset > 0.0 {
+                    let seek = self.offset > 0.0;
+                    let result = if seek {
+                        self.seek_pending = Some(SeekState::Requested);
                         self.mpv
                             .command(&["seek", &self.offset.to_string(), "absolute+exact"])
                     } else {
@@ -793,6 +875,16 @@ impl Runtime {
                         self.fail(error);
                         break;
                     }
+                    self.ready = !seek;
+                }
+                Event::Seeking if self.seek_pending.is_some() => {
+                    self.seek_pending = Some(SeekState::Started);
+                }
+                Event::Restarted if matches!(self.seek_pending, Some(SeekState::Started)) => {
+                    // mpv_command("seek") returns before the new position is ready.
+                    // Ignore the initial load's restart until our seek actually starts.
+                    self.seek_pending = None;
+                    self.seek_position = Some(self.offset);
                     self.offset = 0.0;
                     self.ready = true;
                 }
@@ -803,7 +895,7 @@ impl Runtime {
                     break;
                 }
                 Event::Failed(error) if self.plan.is_some() => {
-                    self.fail(error);
+                    self.failure(error);
                     break;
                 }
                 Event::Shutdown => {
@@ -814,7 +906,7 @@ impl Runtime {
                 _ => {}
             }
         }
-        if self.plan.is_none() {
+        if self.plan.is_none() || self.retry_load {
             return;
         }
         if !self.ready && self.load_started.elapsed() > Duration::from_secs(15) {
@@ -838,6 +930,152 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn next_load_deadline_leaves_time_for_the_full_preload_margin() {
+        let next = Role::Next {
+            index: 1,
+            ready: false,
+            started: false,
+        };
+        assert!(auxiliary_load_timeout(&next) > PRELOAD_MARGIN);
+        assert_eq!(
+            auxiliary_load_timeout(&Role::Static { ready: false }),
+            Duration::from_secs(8)
+        );
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; verifies real seek completion before publishing playback"]
+    fn real_resume_waits_for_the_requested_position_before_reporting_playback() {
+        let library = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("resume.wav");
+        fixture(&audio, 10.0);
+        let mut runtime = Runtime::open(library.into()).unwrap();
+        for id in 1..=12 {
+            let target = 1.0 + id as f64 * 0.1;
+            runtime.begin(id, Tuning::default()).unwrap();
+            runtime
+                .load_plan(Plan {
+                    paths: vec![audio.clone()],
+                    index: 0,
+                    seconds: target,
+                    fade: 0.0,
+                    bumpers: None,
+                    network: false,
+                })
+                .unwrap();
+            if id % 2 == 0 {
+                runtime.control(Control::Pause).unwrap();
+            }
+            until(&mut runtime, id, |r| !r.state.loading);
+            assert!(runtime.seek_pending.is_none());
+            assert!(
+                runtime.state.seconds >= target - 0.05,
+                "Resume exposed the old position: {:?}, target {target}",
+                runtime.state
+            );
+            if id % 2 == 0 {
+                assert!(!runtime.state.playing);
+                tick_for(&mut runtime, id, Duration::from_millis(100));
+                assert!(
+                    runtime.state.seconds >= target - 0.05,
+                    "Paused resume clock moved backwards: {:?}",
+                    runtime.state
+                );
+                runtime.control(Control::Play).unwrap();
+                until(&mut runtime, id, |r| r.state.playing);
+            }
+        }
+        runtime.stop_all();
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; injects device and memory failures into the real runtime"]
+    fn environmental_failures_keep_the_station_and_retry_the_same_recording() {
+        let library = std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.wav");
+        let second = directory.path().join("second.wav");
+        fixture(&first, 10.0);
+        fixture(&second, 10.0);
+        let mut runtime = Runtime::open(library.into()).unwrap();
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec![first.clone(), second],
+                index: 0,
+                seconds: 0.0,
+                fade: 0.0,
+                bumpers: None,
+                network: false,
+            })
+            .unwrap();
+        until(&mut runtime, 1, |r| r.state.playing);
+        for code in [crate::MPV_ERROR_AO_INIT_FAILED, crate::MPV_ERROR_NOMEM] {
+            runtime.failure(Failure {
+                code,
+                message: "Injected environmental failure".into(),
+            });
+            assert!(runtime.blocked.is_empty());
+            assert!(runtime.plan.is_some());
+            assert!(!runtime.want_play);
+            assert!(!runtime.state.playing && !runtime.state.loading);
+            assert!(runtime.state.error_path.is_empty());
+            assert!(runtime.state.error.contains("press Play"));
+            tick_for(&mut runtime, 1, Duration::from_millis(50));
+            assert_eq!(runtime.state.index, 0);
+            runtime.control(Control::Play).unwrap();
+            until(&mut runtime, 1, |r| r.state.playing);
+            assert_eq!(runtime.state.path, first.to_string_lossy());
+            assert!(runtime.state.error.is_empty());
+        }
+        runtime.stop_all();
+    }
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; secondary context failure must not mark a file bad"]
+    fn real_auxiliary_initialization_failure_preserves_files_and_current_only_playback() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.wav");
+        let second = directory.path().join("second.wav");
+        fixture(&first, 3.0);
+        fixture(&second, 3.0);
+        let mut runtime =
+            Runtime::open(std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap().into()).unwrap();
+        // The current decoder remains valid; only opening another context fails.
+        runtime.library = directory.path().join("unavailable-runtime.dll");
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec![first, second],
+                index: 0,
+                seconds: 0.0,
+                fade: 0.0,
+                bumpers: None,
+                network: false,
+            })
+            .unwrap();
+        until(&mut runtime, 1, |runtime| runtime.auxiliary_failed);
+        assert!(runtime.state.playing);
+        assert!(runtime.state.error_path.is_empty());
+        assert!(!runtime.state.error.is_empty());
+        assert!(runtime.blocked.is_empty());
+        until(&mut runtime, 1, |runtime| {
+            runtime.state.index == 1 && runtime.state.playing
+        });
+        runtime.stop_all();
+        runtime
+            .begin(
+                2,
+                Tuning {
+                    sound: Some(directory.path().join("first.wav")),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(runtime.auxiliary_failed);
+        assert!(runtime.state.error_path.is_empty());
+        assert!(!runtime.state.error.is_empty());
+        runtime.stop_all();
+    }
     fn fixture(path: &std::path::Path, seconds: f64) {
         let samples = (seconds * 8000.0) as u32;
         let mut wav = Vec::new();
@@ -879,6 +1117,49 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; verifies silent zero-fade preloading before the old three-second window"]
+    fn real_zero_fade_preloads_with_a_storage_margin() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.wav");
+        let second = directory.path().join("second.wav");
+        fixture(&first, 20.0);
+        fixture(&second, 20.0);
+        let mut runtime =
+            Runtime::open(std::env::var_os("RADIO_REPLAY_MPV_LIBRARY").unwrap().into()).unwrap();
+        runtime.begin(1, Tuning::default()).unwrap();
+        runtime
+            .load_plan(Plan {
+                paths: vec![first, second.clone()],
+                index: 0,
+                seconds: 11.0,
+                fade: 0.0,
+                bumpers: None,
+                network: false,
+            })
+            .unwrap();
+        until(&mut runtime, 1, |runtime| {
+            matches!(
+                runtime.auxiliary.as_ref().map(|aux| &aux.role),
+                Some(Role::Next {
+                    index: 1,
+                    ready: true,
+                    started: false
+                })
+            )
+        });
+        assert!(runtime.state.playing && !runtime.state.transitioning);
+        assert!(
+            runtime.state.duration - runtime.state.seconds > 5.0,
+            "Preload waited until too close to EOF"
+        );
+        assert_eq!(runtime.state.next_path, second.to_string_lossy());
+        assert_eq!(
+            runtime.auxiliary.as_ref().unwrap().mpv.number("volume"),
+            Some(0.0)
+        );
+        runtime.stop_all();
+    }
     #[test]
     #[ignore = "Needs RADIO_REPLAY_MPV_LIBRARY; exercises the real decoder/output with silent fixtures"]
     fn real_native_static_preload_crossfade_and_cancellation() {

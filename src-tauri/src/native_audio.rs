@@ -1,18 +1,33 @@
 use radio_replay_audio::player::{Control, Plan, Player, Snapshot, Tuning};
 use radio_replay_audio::programme::{Bumpers, Interval};
 use radio_replay_core::{
-    library::{self, PreparedStation, TrackProblem},
+    library::{self, IndexedLineup, IndexedStation, TrackProblem},
     metadata,
 };
 use std::{
-    collections::HashSet,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::{Emitter, Manager, WebviewWindow};
 
-pub struct NativeAudio(Player, Result<PathBuf, String>);
+pub struct NativeAudio(
+    Player,
+    Result<PathBuf, String>,
+    Mutex<Option<Arc<IndexedLineup>>>,
+);
+const _: () = assert!(radio_replay_audio::MAX_MUSIC_TRACKS == library::MAX_STATION_TRACKS);
+const _: () = assert!(radio_replay_audio::MAX_BUMPER_TRACKS == library::MAX_BUMPER_TRACKS);
+const _: () = assert!(radio_replay_audio::MAX_NETWORK_STREAMS == library::MAX_NETWORK_STREAMS);
+impl NativeAudio {
+    pub fn startup_error(&self) -> Option<String> {
+        self.0.control(Control::Status).err().map(|error| {
+            eprintln!("Audio runtime initialization failed: {error}");
+            "Audio runtime unavailable. Keep the audio folder next to the program, or reinstall Radio Replay if it is already present. Restart the app after restoring the runtime.".into()
+        })
+    }
+}
 fn main_only(window: &WebviewWindow) -> Result<(), String> {
     if window.label() == "main" {
         Ok(())
@@ -24,11 +39,13 @@ pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
     let path = library_path(app)?;
     let handle = app.clone();
     let bundled = bundled_tuning_source(app);
+    let levels = app.state::<super::AudioPreferences>().get();
     app.manage(NativeAudio(
-        Player::start(path, move |state| {
+        Player::start_with_preferences(path, levels.volume, levels.muted, move |state| {
             let _ = handle.emit_to("main", "native-audio-state", state);
         }),
         bundled,
+        Mutex::default(),
     ));
     Ok(())
 }
@@ -43,13 +60,17 @@ pub(crate) fn library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
                 .resource_dir()
                 .map_err(|e| e.to_string())?
                 .join("audio/libmpv-2.dll");
-            let development =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vendor/mpv/libmpv-2.dll");
             if installed.is_file() {
                 installed
-            } else if development.is_file() {
-                development
             } else {
+                #[cfg(debug_assertions)]
+                {
+                    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../vendor/mpv/libmpv-2.dll");
+                    if development.is_file() {
+                        return Ok(development);
+                    }
+                }
                 installed
             }
         };
@@ -80,7 +101,7 @@ pub async fn native_begin(
             .0
             .lock()
             .map_err(|e| e.to_string())?
-            .load()?;
+            .load_shared()?;
         let mut tuning = Tuning {
             minimum: Duration::from_millis(delay),
             ..Default::default()
@@ -110,7 +131,13 @@ pub async fn native_begin(
         } else {
             tuning.minimum = Duration::ZERO;
         }
-        app.state::<NativeAudio>().0.begin_tuning(tuning)
+        let native = app.state::<NativeAudio>();
+        let state = native.0.begin_tuning(tuning)?;
+        let mut prepared = native.2.lock().map_err(|e| e.to_string())?;
+        if native.0.current(state.generation) {
+            *prepared = None;
+        }
+        Ok(state)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -157,11 +184,29 @@ pub async fn native_control(
     tauri::async_runtime::spawn_blocking(move || {
         let native = app.state::<NativeAudio>();
         if matches!(control, Control::Stop) {
-            if let Some(id) = generation {
-                return native.0.stop_if_current(id);
+            let state = if let Some(id) = generation {
+                native.0.stop_if_current(id)?
+            } else {
+                native.0.control(control)?
+            };
+            let mut prepared = native.2.lock().map_err(|e| e.to_string())?;
+            if prepared
+                .as_ref()
+                .is_some_and(|prepared| prepared.generation != state.generation)
+            {
+                *prepared = None;
             }
+            return Ok(state);
         }
-        native.0.control(control)
+        let save_levels = matches!(control, Control::Volume(_) | Control::Mute);
+        let state = native.0.control(control)?;
+        if save_levels {
+            app.state::<super::AudioPreferences>().set(super::Levels {
+                volume: state.volume,
+                muted: state.muted,
+            })?;
+        }
+        Ok(state)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -173,7 +218,7 @@ pub async fn native_prepare(
     generation: u64,
     key: String,
     group: Option<String>,
-) -> Result<PreparedStation, String> {
+) -> Result<IndexedStation, String> {
     main_only(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
         let native = app.state::<NativeAudio>();
@@ -187,7 +232,9 @@ pub async fn native_prepare(
             }
         };
         current()?;
-        let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+        let started = std::time::Instant::now();
+        let config = library.0.lock().map_err(|e| e.to_string())?.load_shared()?;
+        let config_elapsed = started.elapsed();
         let network = config
             .custom
             .iter()
@@ -196,27 +243,44 @@ pub async fn native_prepare(
             .and_then(|v| v.as_str())
             == Some("network");
         let mut bumper_report = library::bumper_report(&config, &key);
-        let mut report = library::playback_report_for_group(config, &key, group.as_deref())?;
+        let mut report = library::playback_report_for_group_shared(&config, &key, group.as_deref())?;
         report.problems.append(&mut bumper_report.problems);
-        if !network {
-            cache
-                .0
-                .lock()
-                .map_err(|e| e.to_string())?
-                .populate_durations(&mut report.tracks);
-            cache
-                .0
-                .lock()
-                .map_err(|e| e.to_string())?
-                .populate_durations(&mut bumper_report.tracks);
+        let files_elapsed = started.elapsed();
+        let music_count = report.tracks.len();
+        report.tracks.append(&mut bumper_report.tracks);
+        let last_progress = std::cell::Cell::new(("", std::time::Instant::now()));
+        let progress = |phase: &'static str, done: usize, total: usize| {
+            if native.0.current(generation) {
+                let (previous, at) = last_progress.get();
+                if previous == phase && done < total && at.elapsed() < Duration::from_millis(100) {
+                    return;
+                }
+                last_progress.set((phase, std::time::Instant::now()));
+                let _ = app.emit_to("main", "tuning-progress", serde_json::json!({
+                    "generation": generation, "phase": phase, "done": done, "total": total
+                }));
+            }
+        };
+        let measured = if network {
+            metadata::DurationPreparation::default()
+        } else {
+            metadata::measure_durations(
+                &cache.0, &mut report.tracks,
+                || native.0.current(generation),
+                |done, total| progress("measuring", done, total),
+            )?
+        };
+        let measured_elapsed = started.elapsed();
+        let mut cache_error = measured.cache_error;
+        let probe_total = report.tracks.iter().filter(|track| track.duration.is_none()).count();
+        let mut probed = 0;
+        let mut fallback = Vec::new();
+        if !network && probe_total > 0 {
+            progress("probing", 0, probe_total);
         }
         let mut playable = Vec::new();
         let mut prepared_bumpers = Vec::new();
-        for (mut track, is_bumper) in report
-            .tracks
-            .into_iter()
-            .map(|t| (t, false))
-            .chain(bumper_report.tracks.into_iter().map(|t| (t, true)))
+        for (index, mut track) in report.tracks.into_iter().enumerate()
         {
             current()?;
             if network {
@@ -224,37 +288,32 @@ pub async fn native_prepare(
                 continue;
             }
             if track.duration.is_none() {
-                track.duration = cache
-                    .0
-                    .lock()
-                    .map_err(|e| e.to_string())?
-                    .read(Path::new(&track.track.path))
-                    .duration;
-            }
-            if track.duration.is_none() {
-                match native.0.probe(generation, PathBuf::from(&track.track.path)) {
+                let result = native.0.probe(generation, PathBuf::from(&track.track.path));
+                probed += 1;
+                progress("probing", probed, probe_total);
+                match result {
                     Ok(seconds) => {
                         track.duration = Some(seconds);
-                        if let Err(reason) = cache
-                            .0
-                            .lock()
-                            .map_err(|e| e.to_string())?
-                            .remember_duration(Path::new(&track.track.path), seconds)
-                        {
-                            report.problems.push(TrackProblem {
-                                path: track.track.path.clone(),
-                                name: track.track.name.clone(),
-                                reason,
-                                kind: "cache",
-                            });
+                        fallback.push(track.clone());
+                        if fallback.len() >= 256 {
+                            current()?;
+                            if cache_error.is_none() {
+                                if let Err(reason) = metadata::remember_prepared_durations(&cache.0, measured.cache_epoch, &fallback) {
+                                    cache_error = Some(reason);
+                                }
+                            }
+                            fallback.clear();
                         }
                     }
                     Err(reason) => {
                         current()?;
+                        if let Some(message) = reason.recovery_message() {
+                            return Err(message.replace("press Play", "tune in again"));
+                        }
                         report.problems.push(TrackProblem {
                             path: track.track.path.clone(),
                             name: track.track.name.clone(),
-                            reason,
+                            reason: reason.message,
                             kind: "file",
                         });
                         continue;
@@ -265,7 +324,7 @@ pub async fn native_prepare(
                 .duration
                 .is_some_and(|n| n.is_finite() && n > 0.0 && n <= 172800.0)
             {
-                if is_bumper {
+                if index >= music_count {
                     prepared_bumpers.push(track);
                 } else {
                     playable.push(track);
@@ -280,20 +339,31 @@ pub async fn native_prepare(
             }
         }
         current()?;
-        // Native audio needs no browser asset grants. Retain prepared-file identity
-        // for metadata IPC and validate it again before handing paths to libmpv.
+        if cache_error.is_none() {
+            if let Err(reason) = metadata::remember_prepared_durations(&cache.0, measured.cache_epoch, &fallback) {
+                cache_error = Some(reason);
+            }
+        }
+        if let Some(reason) = cache_error {
+            report.problems.push(TrackProblem {
+                path: String::new(), name: "Metadata cache".into(), reason, kind: "cache"
+            });
+        }
+        if cfg!(debug_assertions) && std::env::var_os("RADIO_REPLAY_TUNING_TIMINGS").is_some() {
+            eprintln!("Tuning timings: config={config_elapsed:?} filesystem={:?} metadata={:?} decoder={:?} total={:?} cached={} parsed={} probed={probed}",files_elapsed-config_elapsed,measured_elapsed-files_elapsed,started.elapsed()-measured_elapsed,started.elapsed(),measured.cache_hits,measured.parsed);
+        }
+        let lineup=Arc::new(IndexedLineup::new(generation,key.clone(),config,group.unwrap_or_else(||"all".into()),playable,prepared_bumpers));
+        let response=lineup.describe(report.problems);
+        // File identities are shared by metadata authorization and this native
+        // generation. Loading indexes never clones or locks a grant per track.
+        let mut prepared=native.2.lock().map_err(|e|e.to_string())?;
+        current()?;
+        let store = library.0.lock().map_err(|e| e.to_string())?;
+        lineup.validate_config(&store.load_shared()?)?;
         let mut grants = library.3.lock().map_err(|e| e.to_string())?;
-        if grants.len() + playable.len() + prepared_bumpers.len() > 100000 {
-            grants.clear();
-        }
-        for track in playable.iter().chain(prepared_bumpers.iter()) {
-            grants.insert(format!("{key}\0{}", track.track.path), track.clone());
-        }
-        Ok(PreparedStation {
-            tracks: playable,
-            bumpers: prepared_bumpers,
-            problems: report.problems,
-        })
+        grants.remember(&key, lineup.tracks.iter().cloned())?;
+        *prepared=Some(lineup);
+        Ok(response)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -304,7 +374,7 @@ pub async fn native_load(
     app: tauri::AppHandle,
     generation: u64,
     key: String,
-    paths: Vec<String>,
+    slots: Vec<usize>,
     index: usize,
     seconds: f64,
     fade: Option<f64>,
@@ -318,34 +388,33 @@ pub async fn native_load(
         if !native.0.current(generation) {
             return Err("Tuning changed".into());
         }
-        if paths.is_empty()
-            || paths.len() > 100000
-            || index >= paths.len()
-            || !seconds.is_finite()
-            || !(0.0..=172800.0).contains(&seconds)
-            || !fade.unwrap_or(0.0).is_finite()
-            || !(0.0..=30.0).contains(&fade.unwrap_or(0.0))
-        {
-            return Err("Invalid native playback plan".into());
-        }
-        let library = app.state::<super::Library>();
         let bumper_count = bumper_count.unwrap_or(0);
-        if bumper_count >= paths.len() || bumper_count > 1000 {
-            return Err("Invalid bumper count".into());
-        }
-        let music_count = paths.len() - bumper_count;
-        let config = library.0.lock().map_err(|e| e.to_string())?.load()?;
+        let request = library::PlaybackRequest {
+            count: slots.len(),
+            index,
+            seconds,
+            fade: fade.unwrap_or(0.0),
+            bumper_count,
+            programme_context: programme_context.as_deref(),
+        };
+        request.validate_bounds()?;
+        let library = app.state::<super::Library>();
+        let lineup = native
+            .2
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone()
+            .ok_or("Station has not been prepared for this tune")?;
+        let selected = lineup.select(generation, &key, &slots, bumper_count)?;
+        let config = library.0.lock().map_err(|e| e.to_string())?.load_shared()?;
+        lineup.validate_config(&config)?;
         let station = config
             .custom
             .iter()
             .find(|s| s.key == key)
             .ok_or("Station unavailable")?;
         let network = station.extra.get("mode").and_then(|v| v.as_str()) == Some("network");
-        if network && (bumper_count > 0 || seconds != 0.0 || fade.unwrap_or(0.0) != 0.0) {
-            return Err(
-                "Network stations do not support virtual seeking, crossfades or bumpers".into(),
-            );
-        }
+        let music_count = request.validate_station(network, &lineup.group)?;
         let settings = if bumper_count > 0 {
             radio_replay_core::bumpers::Settings::from_station(station)?
         } else {
@@ -354,46 +423,32 @@ pub async fn native_load(
         if bumper_count > 0 && settings.is_none() {
             return Err("Bumpers are not enabled on this music station".into());
         }
-        if index >= music_count {
-            return Err("Initial playback must select a music track".into());
-        }
-        let mut seen_music = HashSet::new();
-        let mut seen_bumpers = HashSet::new();
-        let mut approved = Vec::with_capacity(paths.len());
-        let mut lengths = Vec::with_capacity(paths.len());
+        let approved = if network {
+            selected
+                .iter()
+                .map(|track| {
+                    radio_replay_network::validate(&track.track.path)?;
+                    Ok(PathBuf::from(&track.track.path))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        } else {
+            IndexedLineup::verify_files(&selected, || native.0.current(generation))?
+        };
+        let mut lengths = Vec::with_capacity(slots.len());
         let mut revision = std::collections::hash_map::DefaultHasher::new();
-        for (i, path) in paths.into_iter().enumerate() {
-            let unique = if i < music_count {
-                seen_music.insert(path.clone())
-            } else {
-                seen_bumpers.insert(path.clone())
-            };
-            if !unique {
-                return Err("Duplicate native playback path".into());
+        for track in selected {
+            if !native.0.current(generation) {
+                return Err("Tuning changed".into());
             }
-            let track = super::saved_audio(&library, &key, &path)?;
             if network {
-                if !station.tracks.iter().any(|t| t.path == path) {
-                    return Err("Stream is not saved in this station".into());
-                }
-                radio_replay_network::validate(&path)?;
-                approved.push(PathBuf::from(path));
                 continue;
             }
             lengths.push(track.duration.unwrap_or(0.0));
             track.cache_signature.hash(&mut revision);
-            let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-            if metadata::Cache::signature_from_metadata(&metadata) != track.cache_signature {
-                return Err("Audio changed after station preparation; tune again".into());
-            }
-            approved.push(PathBuf::from(path));
         }
         let bumpers = if bumper_count > 0 {
             let settings = settings.unwrap();
-            let context = programme_context.unwrap_or_else(|| "all".into());
-            if context.len() > 1024 {
-                return Err("Invalid programme context".into());
-            }
+            let context = programme_context.unwrap_or_else(|| lineup.group.clone());
             Some(Bumpers {
                 music_count,
                 lengths,

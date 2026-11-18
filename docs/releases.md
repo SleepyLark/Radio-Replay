@@ -1,108 +1,87 @@
 # Publishing Radio Replay releases
 
-The workflow is `.github/workflows/build.yml`, named **Build and release**.
-It builds Windows x64 packages. Linux and macOS currently have source checks,
-not published installers.
+The **Build and release** workflow in `.github/workflows/build.yml` checks the
+workspace and packages Windows x64. Linux/macOS have source checks and no
+published installers. See the [changelog](../CHANGELOG.md) and
+[audit progress](pre-1.0-audit-progress.md) before preparing a release; unfinished
+release prerequisites are tracked there.
 
-## One-time GitHub setup
+## Repository setup
 
-1. Push the workflow and scripts to `main` in `SleepyLark/Radio-Replay`.
-2. In the repository's **Settings → Actions → General**, make sure Actions are
-   enabled and the workflow's actions are permitted: `actions/*`,
-   `dtolnay/rust-toolchain`, and `Swatinem/rust-cache`.
-3. Open **Actions → Build and release** and confirm the first branch run passes.
+GitHub Actions must permit `actions/*`, `dtolnay/rust-toolchain` and
+`Swatinem/rust-cache`. The workflow defaults to read-only repository access and
+grants `contents: write` only to the publishing job. Unsigned builds do not need
+a personal access token or signing certificate. Repository/organization policy
+may still restrict Actions or token permissions.
 
-No personal access token, repository secret, or code-signing certificate is
-required for unsigned builds. The workflow defaults to read-only repository
-access and grants `contents: write` only to the publishing job. An organization
-policy can still restrict Actions or token permissions; an administrator must
-resolve those restrictions if GitHub reports them.
+## Prepare a version
 
-## First Rust release: 0.6.5
-
-After committing the README/workflow changes, run from the repository root:
+Choose an unused version and update all manifests together:
 
 ```powershell
-npm run check:version
-git push origin main
-git tag -a v0.6.5 -m "Radio Replay 0.6.5"
-git push origin v0.6.5
-```
-
-The tag must point to the commit containing the new workflow. Do not tag an older
-Electron commit. The version guard rejects a tag that disagrees with the project
-manifests, including a tag that reuses the Electron version number by mistake.
-
-Watch the tag run in **Actions → Build and release**. All platform checks must
-pass before Windows packaging begins. The publishing job then creates the
-release with its installer, standalone executable, and `SHA256SUMS.txt`.
-
-The existing Electron tag `v0.5.0` is historical. Leave it intact. Stable Rust
-releases explicitly set GitHub's Latest marker. Prerelease versions such as `0.7.0-beta.1` do not become Latest.
-
-## Build without publishing
-
-Use **Actions → Build and release → Run workflow**, select `main`, and run it.
-After it succeeds, download **radio-replay-windows-x64** under the run's Artifacts
-section. Artifacts are kept for 14 days. A manual run does not create a tag or
-publish a GitHub Release.
-
-## Subsequent releases
-
-For example, to prepare version 0.6.6:
-
-```powershell
-npm run version:set -- 0.6.6
+npm run version:set -- 0.6.7
 npm run check:version
 git diff
 ```
 
-The setter updates `package.json`, `package-lock.json`, both package Cargo
-manifests, `Cargo.lock`, and `src-tauri/tauri.conf.json`. It does not commit, tag,
-push, or publish anything. Run the relevant checks, review the changes, and then:
+The version above is an example, not a statement that a release exists. The
+setter updates the npm manifest/lockfile, all four workspace Cargo manifests,
+`Cargo.lock` and `src-tauri/tauri.conf.json`. It does not commit, tag or publish.
+Update the changelog and review the release notes with the code changes. Run the
+[development checks](development.md), commit the reviewed changes, and push the
+commit before tagging. Keep the stable application identifier unchanged.
+
+After confirming the version is unused, tag the checked commit using the
+manifest version:
 
 ```powershell
-git add package.json package-lock.json crates/core/Cargo.toml src-tauri/Cargo.toml Cargo.lock src-tauri/tauri.conf.json
-git commit -m "Prepare Radio Replay 0.6.6"
-git push origin main
-git tag -a v0.6.6 -m "Radio Replay 0.6.6"
-git push origin v0.6.6
+$releaseVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+npm run check:version
+git tag -a "v$releaseVersion" -m "Radio Replay $releaseVersion"
+git push origin "v$releaseVersion"
 ```
 
-Include any other release changes in the commit before tagging. Use a new
-version for changed binaries instead of moving an already published tag.
+The version guard rejects mismatched tags. Use a new version for changed
+binaries; do not move a published tag. Stable versions receive GitHub's Latest
+marker; prerelease versions do not. Watch the tag run in **Actions → Build and
+release**: checks must pass before packaging and publishing.
 
-## Local packaging
+## Build without publishing
 
-The same packaging script used in CI requires PowerShell 7.3 or newer:
+Use **Actions → Build and release → Run workflow** and select the intended
+commit's branch. Download **radio-replay-windows-x64** from the successful run's
+Artifacts section; artifacts are retained for 14 days. A manual run does not
+create a tag or publish a release.
+
+Local packaging uses the same script as CI and requires PowerShell 7.3 or newer:
 
 ```powershell
 pwsh -File scripts/package-windows.ps1
 ```
 
-Outputs are written to `release/<version>/windows-x64/`:
+Outputs under `release/<version>/windows-x64/` are:
 
 - `Radio-Replay-<version>-Windows-x64-setup.exe`
-- `Radio-Replay-<version>-Windows-x64.exe`
+- `Radio-Replay-<version>-Windows-x64-portable.zip`
 - `SHA256SUMS.txt`
 
-The script checks version consistency, builds with `Cargo.lock` locked, and
-calculates hashes of the final files. The publishing job verifies those hashes
-again after downloading the workflow artifact. These hashes detect changed
-downloads; they are not a code-signing certificate.
+The portable ZIP contains the executable, audio DLL/license and runtime source
+information together. A bare executable is not the portable distribution. The
+script verifies the ZIP, checks version consistency, builds with the lockfile
+locked, and hashes the final installer/ZIP. Publishing verifies those hashes
+again after downloading the artifact. Checksums do not provide code signing;
+these builds remain unsigned and may trigger SmartScreen.
 
 ## Troubleshooting
 
 | Problem | What to check |
 | --- | --- |
-| No release after pushing `main` | Branch pushes only run checks. Push a matching `v<version>` tag to publish. |
-| Tag-version mismatch | Use `npm run version:set` and review all version files before tagging. Do not overwrite existing release tags. |
-| No Run workflow button | The workflow must first be present on the default branch, and Actions must be enabled. |
-| `Resource not accessible by integration` or HTTP 403 | Check repository/organization Actions policy and the publish job's `contents: write` permission. |
-| Packaging never starts | A validation job failed; inspect its log before retrying the build. |
-| A rerun finds an existing release | The workflow replaces same-named assets and completes publishing. Immutable releases may reject replacement; use a new version for changed packages. |
-| Windows shows SmartScreen | These builds are unsigned. Signing can be configured later with a certificate and protected secrets. |
+| No release after pushing a branch | Branch pushes run checks. A matching `v<version>` tag triggers publishing. |
+| Tag-version mismatch | Review the version setter's changes before tagging. |
+| No Run workflow button | The workflow must exist on the default branch and Actions must be enabled. |
+| HTTP 403 or `Resource not accessible by integration` | Check repository/organization Actions policy and publishing token permissions. |
+| Packaging never starts | Inspect failed validation jobs first. |
+| Rerunning an existing release | The workflow replaces same-named assets where allowed; immutable releases may reject this. Use a new version for changed packages. |
 
-Workflow configuration is validated locally, but hosted runners, repository
-policy, and publishing permissions can only be confirmed by a GitHub run after
-the changes are pushed.
+Hosted runner behavior and publishing permissions can only be confirmed by a
+GitHub run. Local validation does not publish or verify a hosted release.

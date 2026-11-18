@@ -18,6 +18,11 @@
           "identifier": "native-smoke",
           "windows": ["main", "mini"],
           "permissions": ["allow-native-smoke-report"]
+        },
+        {
+          "identifier": "native-smoke-label-check",
+          "windows": ["mini"],
+          "permissions": ["allow-load-config", "allow-save-settings", "allow-clear-metadata-cache"]
         }
       ]
     }

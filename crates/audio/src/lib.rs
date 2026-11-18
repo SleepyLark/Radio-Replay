@@ -4,6 +4,10 @@ pub mod player;
 pub mod programme;
 mod runtime;
 mod stream;
+pub const MAX_MUSIC_TRACKS: usize = 100_000;
+pub const MAX_NETWORK_STREAMS: usize = 1_000;
+pub const MAX_BUMPER_TRACKS: usize = 1_000;
+pub const MAX_PLAN_PATHS: usize = MAX_MUSIC_TRACKS + MAX_BUMPER_TRACKS;
 use libloading::Library;
 use std::{
     ffi::{c_char, c_int, c_ulong, c_void, CStr, CString},
@@ -36,11 +40,50 @@ struct EndFile {
     error: c_int,
 }
 #[derive(Debug, Clone, PartialEq)]
+pub struct Failure {
+    pub code: i32,
+    pub message: String,
+}
+// mpv 0.42 client.h: allocation failure and audio-output initialization failure.
+pub const MPV_ERROR_NOMEM: i32 = -2;
+pub const MPV_ERROR_AO_INIT_FAILED: i32 = -14;
+impl Failure {
+    pub fn recovery_message(&self) -> Option<&'static str> {
+        match self.code {
+            MPV_ERROR_AO_INIT_FAILED => {
+                Some("Audio output unavailable. Check your sound device, then press Play.")
+            }
+            MPV_ERROR_NOMEM => {
+                Some("Audio playback ran out of memory. Close other applications, then press Play.")
+            }
+            _ => None,
+        }
+    }
+}
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self { code: 0, message }
+    }
+}
+impl From<&str> for Failure {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for Failure {}
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     None,
     Loaded,
+    Seeking,
+    Restarted,
     Ended,
-    Failed(String),
+    Failed(Failure),
     Shutdown,
     Other,
 }
@@ -155,9 +198,9 @@ impl Mpv {
                 ))?;
             }
             // CI exercises timed native decoding without requiring a sound device.
-            // This override is compiled only into this crate's unit-test binary.
-            #[cfg(test)]
-            if std::env::var("RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT").as_deref() == Ok("1") {
+            // Normal/release builds ignore this override. The opt-in debug
+            // desktop harness can also exercise decoding without a sound device.
+            if test_output_enabled() {
                 mpv.check(option(
                     mpv.handle,
                     string("ao")?.as_ptr(),
@@ -297,14 +340,19 @@ impl Mpv {
             0 => Event::None,
             1 => Event::Shutdown,
             8 => Event::Loaded,
+            20 => Event::Seeking,
+            21 => Event::Restarted,
             7 if !event.data.is_null() => {
                 let end = unsafe { &*(event.data as *const EndFile) };
                 match end.reason {
                     0 => Event::Ended,
-                    4 | 5 => Event::Failed(if end.error < 0 {
-                        self.check(end.error).unwrap_err()
-                    } else {
-                        "Audio references/playlists are disabled in local playback mode".into()
+                    4 | 5 => Event::Failed(Failure {
+                        code: end.error,
+                        message: if end.error < 0 {
+                            self.check(end.error).unwrap_err()
+                        } else {
+                            "Audio references/playlists are disabled in local playback mode".into()
+                        },
                     }),
                     _ => Event::Other,
                 }
@@ -319,6 +367,17 @@ impl Drop for Mpv {
             unsafe { (self.destroy)(self.handle) };
             self.handle = std::ptr::null_mut();
         }
+    }
+}
+
+pub fn test_output_enabled() -> bool {
+    #[cfg(any(test, all(debug_assertions, feature = "smoke-test-output")))]
+    {
+        std::env::var("RADIO_REPLAY_AUDIO_TEST_NULL_OUTPUT").as_deref() == Ok("1")
+    }
+    #[cfg(not(any(test, all(debug_assertions, feature = "smoke-test-output"))))]
+    {
+        false
     }
 }
 

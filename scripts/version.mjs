@@ -50,6 +50,8 @@ try {
   const tag=process.argv[2]==='--tag'?process.argv[3]:process.env.GITHUB_REF_TYPE==='tag'?process.env.GITHUB_REF_NAME:undefined;
   if(process.argv[2]==='--tag'&&!tag)throw new Error('--tag requires a tag such as v0.6.5');
   if(tag&&tag!==`v${version}`)throw new Error(`Tag ${tag} does not match project version v${version}`);
+  if(tag&&JSON.parse(read('src-tauri/tauri.conf.json')).identifier!=='com.local.radioreplay.preview')
+    throw new Error('Release identifier must remain com.local.radioreplay.preview to preserve existing libraries. Use a separate Tauri config for feature previews.');
   console.log(`All project versions agree: ${version}${tag?` (${tag})`:''}`);
   if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\n`);
 } catch(error) {

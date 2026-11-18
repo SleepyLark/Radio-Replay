@@ -1,13 +1,8 @@
-# Bumper preview
+# Bumper clips
 
-Development branch: `codex/station-bumpers`. This worktree uses the separate
-`com.local.radioreplay.bumpers-preview` application identifier, so testing does
-not overwrite the main app's library, preferences, or metadata cache. Restore
-the main identifier before merging or publishing a normal release.
-
-From this worktree, run `npm run desktop`. In Manage Stations, Import library
-can copy your existing `stations.json` into the preview. The source library
-and audio files remain in place.
+Bumpers are available in the normal native-audio build and use the same library
+as your stations. No feature worktree or alternate application identifier is
+needed. Developers can run `npm run desktop` from the repository root.
 
 ## Configure a station
 
@@ -30,7 +25,9 @@ The current partial song counts as one song; time mode counts only its remaining
 playing time. Bumpers play fully without crossfading at either end. Normal
 music-to-music crossfades remain enabled.
 
-Missing/unsupported clips produce the existing file-warning toast. A missing,
+Missing/unsupported clips produce the existing file-warning toast. Unreadable
+subfolders are skipped while accessible clips remain available; scan warnings
+are reported separately from removable station-file failures. A missing,
 empty, or invalid bumper folder falls back to ordinary music playback. Continuous
 **Radio broadcast** stations do not expose or use bumper settings.
 

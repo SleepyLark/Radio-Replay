@@ -19,7 +19,7 @@ impl Bumpers {
     pub fn valid(&self, count: usize) -> bool {
         self.music_count > 0
             && self.music_count < count
-            && count - self.music_count <= 1000
+            && count - self.music_count <= crate::MAX_BUMPER_TRACKS
             && self.lengths.len() == count
             && self
                 .lengths

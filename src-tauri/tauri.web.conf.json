@@ -1,0 +1,17 @@
+{
+  "build":{"beforeBuildCommand":"npm run build"},
+  "app": {
+    "security": {
+      "capabilities": [
+        "main-window",
+        "mini-player",
+        {
+          "identifier": "web-audio-comparison",
+          "windows": ["main"],
+          "permissions": ["allow-prepare-station", "allow-resolve-tuning-sound"]
+        }
+      ],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  }
+}

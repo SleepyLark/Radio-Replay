@@ -9,6 +9,8 @@ pub struct Group {
     pub members: Vec<String>,
 }
 pub fn save_group(config: &mut Config, mut group: Group) -> Result<(), String> {
+    crate::validation::identifier(&group.id, "Group identifier")?;
+    crate::validation::name(&group.name, "Group name")?;
     if group.id.trim().is_empty() || group.id == "all" || group.name.trim().is_empty() {
         return Err("Group name is required".into());
     }
@@ -47,16 +49,9 @@ pub fn save_settings(config: &mut Config, patch: Map<String, Value>) -> Result<(
         let valid = match key.as_str() {
             "accent" => value
                 .as_str()
-                .map(|s| {
-                    s.len() == 7
-                        && s.starts_with('#')
-                        && s[1..].chars().all(|c| c.is_ascii_hexdigit())
-                })
+                .map(|s| crate::validation::color(s, false))
                 .unwrap_or(false),
-            "crossfade" => value
-                .as_f64()
-                .map(|n| n.is_finite() && (0.0..=30000.0).contains(&n))
-                .unwrap_or(false),
+            "crossfade" => crate::validation::crossfade(value),
             "showProgress" | "reduceMotion" | "randomNext" | "closeToTray" | "tuningTransition"
             | "showScanlines" | "matchBannerAccent" => value.is_boolean(),
             "tuningMinMs" | "tuningMaxMs" => value.as_u64().map(|n| n <= 1500).unwrap_or(false),
@@ -92,6 +87,25 @@ pub fn save_settings(config: &mut Config, patch: Map<String, Value>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rejects_invalid_group_identity_without_mutating_the_library() {
+        let mut config = Config::default();
+        for (id, name) in [
+            ("g\0".to_string(), "G".to_string()),
+            ("g".into(), "x".repeat(201)),
+        ] {
+            assert!(save_group(
+                &mut config,
+                Group {
+                    id,
+                    name,
+                    members: vec![]
+                }
+            )
+            .is_err());
+            assert!(config.groups.is_empty());
+        }
+    }
     #[test]
     fn settings_are_validated_atomically_and_unknown_saved_values_survive() {
         let mut config = Config::default();

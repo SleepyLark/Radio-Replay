@@ -4,6 +4,9 @@ version = "0.6.6"
 edition = "2021"
 license = "MIT"
 
+[features]
+smoke-test-output = []
+
 [dependencies]
 libloading = "0.8"
 serde = { version = "1", features = ["derive"] }

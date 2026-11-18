@@ -2,9 +2,7 @@
 
 Radio Replay turns your own audio collection into a desktop radio experience. Create shuffled music stations, tune into complete radio recordings, organize stations into groups, and give each one its own artwork and style.
 
-The current application uses **Rust, Tauri 2, and Svelte 5**, with native audio playback through **libmpv**. WebView2 renders the interface; audio decoding and output run in Rust-owned native workers. The original Electron application remains available in Git history.
-
-The libmpv migration is merged into `main` and selected by the normal launch and package commands. See [native audio setup and implementation details](docs/libmpv-migration.md).
+Windows releases include the audio runtime. Install the app or extract the complete portable ZIP, then add your files and tune in. Local playback works offline; network stations can play direct public HTTP(S) audio streams.
 
 The station-tuning experience is inspired by games such as Grand Theft Auto. No game audio, music, or game artwork is included; you supply your own collection.
 
@@ -30,12 +28,7 @@ You do not need Rust, Node.js, or npm to use a release build. Both Windows downl
 
 Release builds are currently unsigned; Windows may display a SmartScreen warning. Linux and macOS receive source/build checks in CI, but native playback and media controls still need testing before we offer packages for them.
 
-Older releases, including the original `v0.5.0`, contain the Electron application. The Rust release prepared by this repository is `v0.6.5`.
-
 ## Features
-
-This development fork adds optional between-song clips with song-count or
-listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md).
 
 - Create stations from files, folders, or audio dropped into the app.
 - Import local M3U/M3U8 playlists through the station editor; see the [playlist import guide](docs/local-playlists.md).
@@ -45,26 +38,30 @@ listening-time intervals. See the [bumper preview guide](docs/bumpers-preview.md
 - Customize logos, GIFs, banners, colors, scanlines, motion, and tuning static.
 - Display embedded track information, synchronized lyrics, and timestamped track listings.
 - Set global or per-station crossfades.
+- Insert optional bumper clips between songs using song-count or listening-time intervals; see the [bumper guide](docs/bumpers-preview.md).
 - Use keyboard shortcuts, media keys, the tray, and a mini player.
 - Cache metadata and durations in SQLite for reuse across launches.
 - Inspect problematic files through dismissible notifications.
 
-Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. M3U/M3U8 imports support local audio or direct public HTTP(S) audio streams. See the [network playlist preview](docs/network-playlists.md) for setup, security controls, and current limits. Network stations also accept manually entered direct audio URLs. Remote playlist fetching is not enabled.
+Recognized audio extensions are MP3, M4A, AAC, OGG, WAV, and FLAC. libmpv handles the codecs inside those containers, including ALAC in M4A. M3U/M3U8 imports support local audio or direct public HTTP(S) audio streams. See the [network station guide](docs/network-playlists.md) for setup, security controls, and current limits. Network stations also accept manually entered direct audio URLs. Remote playlist fetching is not enabled.
 
 ## Getting started
 
 ### Create and customize stations
 
+Folder imports keep accessible audio when a subfolder or entry cannot be read. Review the skipped-item report before saving. An unreadable selected folder or an exceeded scan limit remains an error. Bumper scans also keep usable clips and report skipped items when you tune in.
+
 Choose **Create Station**, add files or a folder, and select a playback style:
 
 - **Music station** shuffles its tracks. Reorder controls are hidden because playback order is shuffled.
 - **Radio broadcast** follows the playlist order. Move individual recordings or entire folders with **Up**, **Down**, or **First**. Folder moves preserve the relative order of their recordings.
+- **Network station** plays direct public HTTP(S) audio links. Links are shuffled when tuning; keep local files in separate stations.
 
 Recordings stream through libmpv, with one next recording preloaded near a transition. Crossfades use native equal-power mixing; zero-fade stations hand off to the preloaded decoder at EOF. Transitions are not guaranteed to be sample-accurate gapless playback.
 
 Add a logo, banner image or color, accent color, and playback options in the station editor. Supported artwork extensions are PNG, JPG, JPEG, WebP, and GIF.
 
-Use **Manage Stations** to edit or remove station entries. Removing an entry never deletes the source audio or artwork. **Manage Stations → Import library** imports a `stations.json`, including one from the Electron version, without moving the original media.
+Use **Manage Stations** to edit or remove station entries. Removing an entry never deletes the source audio or artwork. **Manage Stations → Import library** imports a `stations.json`, including one from the Electron version, without moving the original media. Import replaces the current library; export a copy first if you want to retain it separately.
 
 ### Tune in
 
@@ -73,6 +70,8 @@ Select a station from the home screen or sidebar. On its first tune in a session
 The bottom Now Playing bar appears on **All Stations**. The PIP button beside **↑ ↓ TO TUNE** opens the mini player; its exit-PIP button restores the main window.
 
 Closing the main window exits by default. **Settings → General** can enable keeping playback in the tray. **Quit Radio Replay** is also available in Settings.
+
+Volume and mute are remembered across launches. If the audio runtime cannot start, a single startup message explains how to restore it; your library remains available for editing. On Windows, keep the `audio` folder beside the program.
 
 ## Player controls
 
@@ -119,15 +118,31 @@ On Windows, the current Rust app stores its data here:
 ```text
 %APPDATA%\com.local.radioreplay.preview\
   stations.json
-  stations.json.bak
+  backups/                    (last five saves and seven daily snapshots)
   metadata-cache.sqlite
+  audio-preferences.json      (volume and mute)
+  instance.lock / instance.port
 ```
 
-The `.preview` identifier is intentionally retained so existing Rust installations keep their stations, settings, and cache. Audio and artwork stay in their original locations; the configuration stores paths to them. SQLite may also create `-wal` and `-shm` companion files while running.
+The `.preview` identifier is the stable application identity. Audio and artwork stay in their original locations; the configuration stores paths to them. SQLite may also create `-wal` and `-shm` companion files while running. Only one app instance uses a data directory; launching again restores the running player.
+
+Changed saves retain five previous versions plus seven daily snapshots (UTC days). Unchanged saves do not rotate backups. If the library cannot be read, the recovery dialog can restore the newest readable backup or start fresh; both preserve the original as `stations.corrupt-*.json`. **Manage Stations → Export library** or **Settings → Advanced → Export library** saves a separate JSON copy. The saved schema version prevents an older app from silently overwriting a future format it does not understand.
+
+Library schema 2 stores all crossfades in milliseconds. Reading an older library converts its seconds-style values once to preserve the previous playback behavior. Volume and mute use the separate small preferences file and are not included in a library export.
+
+Local stations support up to 100,000 music files plus 1,000 bumper clips; network stations support 1,000 streams. Library files are limited to 256 MiB.
+
+Artwork supports PNG, JPEG, GIF and WebP up to 25 MiB, 8,192 pixels per side and roughly 16 megapixels per canvas. Animated artwork is limited to 256 frames and roughly 64 megapixels across full-canvas frames. These checks run before browser access is granted; unsupported or oversized saved artwork is left on disk and omitted from browser access.
 
 **Clear metadata cache** removes cached information without removing your stations or media. Files will be measured again as needed. Back up the app-data folder before manually editing or moving its contents; close the app before copying an active SQLite database.
 
+If SQLite detects corruption while opening the metadata cache, Radio Replay preserves the damaged cache and any remaining journal files in a `metadata-cache-corrupt-*` folder beside it, then rebuilds the cache automatically. Stations and media are unaffected. Permission and locking failures do not trigger this recovery.
+
 ## Build from source
+
+The app uses **Rust, Tauri 2, and Svelte 5**. WebView2 renders the interface;
+Rust-owned libmpv workers decode and output audio. See the [native audio guide](docs/libmpv-migration.md)
+and [development validation](docs/development.md) for architecture and test details.
 
 ### Windows prerequisites
 
@@ -179,6 +194,9 @@ For the same named files and checksums used by GitHub Actions, run `pwsh -File s
 Browser integration tests use Playwright with installed Microsoft Edge. Set `RADIO_REPLAY_BROWSER` to another installed Playwright-supported browser channel if needed. Tests use fixtures rather than your real library.
 
 An isolated native integration harness covers libmpv playback/static, SQLite, tray behavior, mini-player IPC, and absence of browser audio fallback. See [development validation](docs/development.md) for its commands.
+`npm run test:native` builds and runs it against synthetic profiles, including
+restart and missing-runtime cases. A separate scheduled/manual workflow retains
+native reports and logs; hosted execution is verified after pushing the workflow.
 
 ## Project layout
 

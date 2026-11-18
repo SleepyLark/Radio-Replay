@@ -10,6 +10,7 @@ struct DropResult {
     id: u64,
     tracks: Vec<Track>,
     error: String,
+    notices: library::ScanNotices,
 }
 
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
@@ -25,20 +26,29 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     let paths = paths.clone();
     std::thread::spawn(move || {
         let result = library::collect_audio(&paths);
-        let (tracks, error) = match result {
-            Ok(tracks) => {
+        let (tracks, notices, error) = match result {
+            Ok(report) => {
                 let library = app.state::<super::Library>();
                 let granted = match library.1.lock() {
                     Ok(mut grants) => {
-                        grants.extend(tracks.iter().map(|t| t.path.clone()));
-                        (tracks, String::new())
+                        grants.extend(report.tracks.iter().map(|t| t.path.clone()));
+                        (report.tracks, report.notices, String::new())
                     }
-                    Err(error) => (vec![], error.to_string()),
+                    Err(error) => (vec![], Default::default(), error.to_string()),
                 };
                 granted
             }
-            Err(error) => (vec![], error),
+            Err(error) => (vec![], Default::default(), error),
         };
-        let _ = app.emit_to("main", "audio-drop", DropResult { id, tracks, error });
+        let _ = app.emit_to(
+            "main",
+            "audio-drop",
+            DropResult {
+                id,
+                tracks,
+                notices,
+                error,
+            },
+        );
     });
 }

@@ -1,61 +1,112 @@
 <script lang="ts">
-  import {untrack} from 'svelte';
+  import { untrack } from 'svelte';
+  import type { LibraryUpdate } from './library-update';
   import Dialog from './Dialog.svelte';
   import StationBanner from './StationBanner.svelte';
   import FileList from './FileList.svelte';
-  import {moveFolder} from './playlist';
-  import {sampleBanner} from './appearance';
-  import {fadeSeconds} from './playback/timeline';
-  import {addNetworkStream, choosePlaylist, type PlaylistImport, chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Config, type Station, type Track} from './library';
-  let {station,logo,settings,incoming,onsaved,oncancel}: {station:Station|null; logo:unknown; settings:Record<string,unknown>; incoming:Track[]; onsaved:(config:Config)=>void; oncancel:()=>void}=$props();
-  const initial=untrack(()=>({station,logo,settings}));
-  const key=initial.station?.key??crypto.randomUUID();
-  let name=$state(initial.station?.station??'');
-  let mode=$state(initial.station?.mode==='network'?'network':initial.station?.mode==='tracks'?'tracks':initial.station?'longset':'tracks');
-  let tracks=$state.raw<Track[]>(initial.station?[...initial.station.tracks]:[]);
-  let logoPath=$state(typeof initial.logo==='string'?initial.logo:'');
-  let bannerPath=$state(String(initial.station?.bannerPath??'')), bannerAccent=$state(String(initial.station?.bannerAccent??''));
-  let useColor=$state(!!initial.station?.bannerColor), bannerColor=$state(String(initial.station?.bannerColor??'#244b42'));
-  let useAccent=$state(!!initial.station?.accent), accent=$state(String(initial.station?.accent??initial.settings.accent??'#c7f464'));
-  let spinLogo=$state(initial.station?.spinLogo===true);
-  let textMode=$state(['titles','lyrics','ignore'].includes(String(initial.station?.textMode))?String(initial.station?.textMode):'auto');
-  let customFade=$state(initial.station?.crossfade!=null), fade=$state(initial.station?fadeSeconds(initial.station,initial.settings)*1000:5000);
-  let streamUrl=$state(''), streamName=$state('');
-  let busy=$state(false), error=$state(''), confirmDelete=$state(false);
-  let playlistReport=$state<PlaylistImport|null>(null), playlistAdded=$state(0), playlistDuplicates=$state(0);
-  const originalBumpers=untrack(()=>station?.bumpers);
-  let bumperEnabled=$state(originalBumpers?.enabled===true), bumperFolder=$state(originalBumpers?.folder??'');
-  let bumperMethod=$state<'songs'|'time'>(originalBumpers?.method==='time'?'time':'songs');
-  let bumperMin=$state<number|undefined>(originalBumpers?.min??2), bumperMax=$state<number|undefined>(originalBumpers?.max??5);
-  const invalidSources=$derived(tracks.some(t=>(/^https?:\/\//i.test(t.path))!==(mode==='network')));
-  const invalidBumperRange=$derived(bumperMin==null||bumperMax==null||!Number.isFinite(bumperMin)||!Number.isFinite(bumperMax)||bumperMin>bumperMax||bumperMin<(bumperMethod==='songs'?1:.1)||bumperMax>(bumperMethod==='songs'?1000:360)||bumperMethod==='songs'&&(!Number.isInteger(bumperMin)||!Number.isInteger(bumperMax)));
-  const invalidBumpers=$derived(mode==='tracks'&&bumperEnabled&&(!bumperFolder||invalidBumperRange));
-  const preview=$derived({key,station:name,mode,tracks,bannerPath,bannerColor:useColor?bannerColor:'',spinLogo});
-  let lastIncoming:Track[]|undefined;
-  function merge(picked:Track[]){const paths=new Set(tracks.map(t=>t.path));tracks=[...tracks,...picked.filter(t=>{if(paths.has(t.path))return false;paths.add(t.path);return true;})];}
-  $effect(()=>{const picked=incoming;if(picked===lastIncoming)return;lastIncoming=picked;if(picked.length)untrack(()=>{if(mode==='network')error='Local audio drops are not supported in network stations.';else merge(picked);});});
-  async function perform(action:()=>Promise<void>){busy=true;error='';try{await action();}catch(e){error=String(e);}finally{busy=false;}}
-  async function add(folder:boolean){await perform(async()=>merge(await chooseAudio(folder)));}
-  async function addStream(){await perform(async()=>{
-    if(tracks.length>=1000)throw new Error('Network stations are limited to 1,000 streams.');
-    const track=await addNetworkStream(streamUrl,streamName);
-    if(tracks.some(t=>t.path===track.path))throw new Error('This link is already in the station.');
-    merge([track]);streamUrl='';streamName='';
-  });}
-  async function importPlaylist(){await perform(async()=>{
-    const report=await choosePlaylist(mode==='network');if(!report)return;
-    if(report.tracks.length&&tracks.length&&(mode==='network')!==(report.network===true))throw new Error('Local files and network streams need separate stations.');
-    if(report.tracks.length&&!tracks.length)mode=report.network?'network':mode;
-    if(mode==='network'&&new Set([...tracks,...report.tracks].map(t=>t.path)).size>1000)throw new Error('Network stations are limited to 1,000 streams.');
-    const previous=tracks.length;merge(report.tracks);
-    playlistAdded=tracks.length-previous;playlistDuplicates=report.tracks.length-playlistAdded;playlistReport=report;
-    if(!name.trim())name=report.name;
-  });}
-  function move(index:number,direction:number){const next=[...tracks];[next[index],next[index+direction]]=[next[index+direction],next[index]];tracks=next;}
-  function removeTracks(paths:string[]){const removed=new Set(paths);tracks=tracks.filter(track=>!removed.has(track.path));}
-  function reorderFolder(folder:string,target:string|undefined,position:'before'|'after'|'first'){tracks=moveFolder(tracks,folder,target,position);}
-  async function banner(){await perform(async()=>{const path=await chooseArtwork();if(!path)return;bannerPath=path;bannerAccent='';try{bannerAccent=await sampleBanner(artworkUrl(path));}catch{/* A failed sample keeps the selected image and default accent. */}});}
-  async function save(){await perform(async()=>onsaved(await saveStation($state.snapshot({key,name,mode,tracks,logoPath,options:{textMode,crossfade:customFade?fade:null,bannerPath,bannerAccent,bannerColor:useColor?bannerColor:'',accent:useAccent?accent:'',spinLogo,bumpers:mode==='tracks'&&(bumperEnabled||bumperFolder)?{enabled:bumperEnabled,folder:bumperFolder,method:bumperMethod,min:invalidBumperRange?(bumperMethod==='songs'?2:10):bumperMin!,max:invalidBumperRange?(bumperMethod==='songs'?5:15):bumperMax!}:null}}))));}
+  import ScanNoticesView from './ScanNotices.svelte';
+  import type { ScanNotices } from './library';
+  import { moveFolder } from './playlist';
+  import { sampleBanner } from './appearance';
+  import { fadeSeconds } from './playback/timeline';
+  import { addNetworkStream, choosePlaylist, type PlaylistImport, chooseAudio, chooseArtwork, chooseBumperFolder, saveStation, deleteStation, artworkUrl, type Station, type Track } from './library';
+  let { station, logo, settings, incoming, incomingNotices, onsaved, oncancel }: {
+      station: Station | null;
+      logo: unknown;
+      settings: Record<string, unknown>;
+      incoming: Track[];
+      incomingNotices: ScanNotices | null;
+      onsaved: (change: LibraryUpdate) => void;
+      oncancel: () => void;
+  } = $props();
+  const initial = untrack(() => ({ station, logo, settings }));
+  const key = initial.station?.key ?? crypto.randomUUID();
+  let name = $state(initial.station?.station ?? '');
+  let mode = $state(initial.station?.mode === 'network' ? 'network' : initial.station?.mode === 'tracks' ? 'tracks' : initial.station ? 'longset' : 'tracks');
+  let tracks = $state.raw<Track[]>(initial.station ? [...initial.station.tracks] : []);
+  let logoPath = $state(typeof initial.logo === 'string' ? initial.logo : '');
+  let bannerPath = $state(String(initial.station?.bannerPath ?? '')), bannerAccent = $state(String(initial.station?.bannerAccent ?? ''));
+  let useColor = $state(!!initial.station?.bannerColor), bannerColor = $state(String(initial.station?.bannerColor ?? '#244b42'));
+  let useAccent = $state(!!initial.station?.accent), accent = $state(String(initial.station?.accent ?? initial.settings.accent ?? '#c7f464'));
+  let spinLogo = $state(initial.station?.spinLogo === true);
+  let textMode = $state(['titles', 'lyrics', 'ignore'].includes(String(initial.station?.textMode)) ? String(initial.station?.textMode) : 'auto');
+  let customFade = $state(initial.station?.crossfade != null), fade = $state(initial.station ? fadeSeconds(initial.station, initial.settings) * 1000 : 5000);
+  let streamUrl = $state(''), streamName = $state('');
+  let busy = $state(false), error = $state(''), confirmDelete = $state(false);
+  let playlistReport = $state<PlaylistImport | null>(null), playlistAdded = $state(0), playlistDuplicates = $state(0);
+  let scanReport = $state<ScanNotices | null>(null);
+  $effect(() => { scanReport = incomingNotices; });
+  const originalBumpers = untrack(() => station?.bumpers);
+  let bumperEnabled = $state(originalBumpers?.enabled === true), bumperFolder = $state(originalBumpers?.folder ?? '');
+  let bumperMethod = $state<'songs' | 'time'>(originalBumpers?.method === 'time' ? 'time' : 'songs');
+  let bumperMin = $state<number | undefined>(originalBumpers?.min ?? 2), bumperMax = $state<number | undefined>(originalBumpers?.max ?? 5);
+  const invalidSources = $derived(tracks.some(t => (/^https?:\/\//i.test(t.path)) !== (mode === 'network')));
+  const invalidBumperRange = $derived(bumperMin == null || bumperMax == null || !Number.isFinite(bumperMin) || !Number.isFinite(bumperMax) || bumperMin > bumperMax || bumperMin < (bumperMethod === 'songs' ? 1 : .1) || bumperMax > (bumperMethod === 'songs' ? 1000 : 360) || bumperMethod === 'songs' && (!Number.isInteger(bumperMin) || !Number.isInteger(bumperMax)));
+  const invalidBumpers = $derived(mode === 'tracks' && bumperEnabled && (!bumperFolder || invalidBumperRange));
+  const preview = $derived({ key, station: name, mode, tracks, bannerPath, bannerColor: useColor ? bannerColor : '', spinLogo });
+  let lastIncoming: Track[] | undefined;
+  function merge(picked: Track[]) { const paths = new Set(tracks.map(t => t.path)); tracks = [...tracks, ...picked.filter(t => { if (paths.has(t.path))
+          return false; paths.add(t.path); return true; })]; }
+  $effect(() => { const picked = incoming; if (picked === lastIncoming)
+      return; lastIncoming = picked; if (picked.length)
+      untrack(() => { if (mode === 'network')
+          error = 'Local audio drops are not supported in network stations.';
+      else
+          merge(picked); }); });
+  async function perform(action: () => Promise<void>) { busy = true; error = ''; try {
+      await action();
+  }
+  catch (e) {
+      error = String(e);
+  }
+  finally {
+      busy = false;
+  } }
+  async function add(folder: boolean) { await perform(async () => { const report = await chooseAudio(folder); if (report) {
+      merge(report.tracks);
+      scanReport = report.notices;
+  } }); }
+  async function addStream() {
+      await perform(async () => {
+          if (tracks.length >= 1000)
+              throw new Error('Network stations are limited to 1,000 streams.');
+          const track = await addNetworkStream(streamUrl, streamName);
+          if (tracks.some(t => t.path === track.path))
+              throw new Error('This link is already in the station.');
+          merge([track]);
+          streamUrl = '';
+          streamName = '';
+      });
+  }
+  async function importPlaylist() {
+      await perform(async () => {
+          const report = await choosePlaylist(mode === 'network');
+          if (!report)
+              return;
+          if (report.tracks.length && tracks.length && (mode === 'network') !== (report.network === true))
+              throw new Error('Local files and network streams need separate stations.');
+          if (report.tracks.length && !tracks.length)
+              mode = report.network ? 'network' : mode;
+          if (mode === 'network' && new Set([...tracks, ...report.tracks].map(t => t.path)).size > 1000)
+              throw new Error('Network stations are limited to 1,000 streams.');
+          const previous = tracks.length;
+          merge(report.tracks);
+          playlistAdded = tracks.length - previous;
+          playlistDuplicates = report.tracks.length - playlistAdded;
+          playlistReport = report;
+          if (!name.trim())
+              name = report.name;
+      });
+  }
+  function move(index: number, direction: number) { const next = [...tracks]; [next[index], next[index + direction]] = [next[index + direction], next[index]]; tracks = next; }
+  function removeTracks(paths: string[]) { const removed = new Set(paths); tracks = tracks.filter(track => !removed.has(track.path)); }
+  function reorderFolder(folder: string, target: string | undefined, position: 'before' | 'after' | 'first') { tracks = moveFolder(tracks, folder, target, position); }
+  async function banner() { await perform(async () => { const path = await chooseArtwork(); if (!path)
+      return; bannerPath = path; bannerAccent = ''; try {
+      bannerAccent = await sampleBanner(artworkUrl(path));
+  }
+  catch { /* A failed sample keeps the selected image and default accent. */ } }); }
+  async function save() { await perform(async () => onsaved(await saveStation($state.snapshot({ key, name, mode, tracks, logoPath, options: { textMode, crossfade: customFade ? fade : null, bannerPath, bannerAccent, bannerColor: useColor ? bannerColor : '', accent: useAccent ? accent : '', spinLogo, bumpers: mode === 'tracks' && (bumperEnabled || bumperFolder) ? { enabled: bumperEnabled, folder: bumperFolder, method: bumperMethod, min: invalidBumperRange ? (bumperMethod === 'songs' ? 2 : 10) : bumperMin!, max: invalidBumperRange ? (bumperMethod === 'songs' ? 5 : 15) : bumperMax! } : null } })))); }
 </script>
 
 <Dialog title={station?'Edit station':'Create station'} {oncancel} {busy} onsubmit={()=>void save()}>
@@ -76,6 +127,7 @@
         {#if playlistReport.issueCount}<details><summary>{playlistReport.issueCount} import notice{playlistReport.issueCount===1?'':'s'} — view details</summary><ul>{#each playlistReport.issues as issue}<li>{#if issue.line}Line {issue.line}:{' '}{/if}<code>{issue.entry}</code> — {issue.reason}</li>{/each}</ul>{#if playlistReport.issueCount>playlistReport.issues.length}<p>Showing the first {playlistReport.issues.length} notices.</p>{/if}</details>{/if}
         <button type="button" onclick={()=>playlistReport=null}>Dismiss import report</button></div>{/if}
       {#if invalidSources}<p role="status">Network entries require Network station playback. Keep local files in a separate station.</p>{/if}
+      <ScanNoticesView report={scanReport} ondismiss={()=>scanReport=null}/>
       <p>{tracks.length} {mode==='network'?'link':'file'}{tracks.length===1?'':'s'}</p>{#if mode==='longset'}<p id="fileOrderHelp">Numbers show the broadcast order. Use ↑ / ↓ to move files or entire folders, or ⇈ First to move a folder to the beginning.</p>{/if}
       <FileList {tracks} network={mode==='network'} reorder={mode==='longset'} onmove={move} onmovefolder={reorderFolder} onremove={removeTracks}/>
     </details>

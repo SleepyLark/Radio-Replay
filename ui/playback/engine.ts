@@ -8,6 +8,7 @@ const MAX_DECODED_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_BUFFERED_SECONDS = 600;
 
 export interface PlaybackState {
+  preparation?: {done:number;total:number;phase:'measuring'|'probing'};
   bumper?: boolean;
   network?: boolean;
   key: string;
@@ -48,6 +49,7 @@ interface Buffered {
   loading: boolean;
 }
 export interface PlaybackOptions {
+  levels?:{volume:number;muted:boolean};
   prepare: (key: string) => Promise<PlayableTrack[] | PreparedStation>;
   url: (path: string) => string;
   onState: (state: PlaybackState) => void;
@@ -104,6 +106,7 @@ export class Playback {
   private timer: ReturnType<typeof setInterval>;
   constructor(options: PlaybackOptions) {
     this.options = options;
+    if(options.levels)this.state={...this.state,...options.levels};
     this.now = options.now ?? (() => performance.now());
     this.random = options.random ?? Math.random;
     this.current = (options.audio ?? (() => new Audio()))();
@@ -155,7 +158,7 @@ export class Playback {
   private recordProblem(
     track: { path: string; name: string },
     reason: string,
-    kind: 'file' | 'cache' = 'file',
+    kind: TrackProblem['kind'] = 'file',
   ) {
     const key = track.path;
     const detail = reason.replace(/^Error:\s*/, '');
@@ -418,6 +421,7 @@ export class Playback {
       ).length;
       this.emit({
         error: [
+          ...[...this.problems.values()].filter(problem=>problem.kind==='scan').map(problem=>problem.reason),
           skipped > 0
             ? `${skipped} file${skipped === 1 ? ' could' : 's could'} not be played and ${skipped === 1 ? 'was' : 'were'} skipped.`
             : '',

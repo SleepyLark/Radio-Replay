@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default, rename_all = "camelCase")]
 pub struct Snapshot {
     pub station: String,
+    pub track_id: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -19,22 +20,30 @@ pub struct Snapshot {
     pub volume: f64,
     pub muted: bool,
     pub network: bool,
+    pub audio_ready: bool,
 }
 impl Snapshot {
     pub fn validate(&self) -> Result<(), String> {
         if [
             &self.station,
+            &self.track_id,
             &self.title,
             &self.artist,
             &self.album,
             &self.art,
             &self.banner,
             &self.banner_color,
+            &self.accent,
         ]
         .iter()
         .any(|s| s.len() > 16384)
         {
             return Err("Desktop text is too long".into());
+        }
+        if !crate::validation::color(&self.accent, true)
+            || !crate::validation::color(&self.banner_color, true)
+        {
+            return Err("Desktop colors must use #rrggbb or be empty".into());
         }
         if ![self.seconds, self.duration, self.volume]
             .iter()
@@ -48,6 +57,60 @@ impl Snapshot {
             return Err("Invalid desktop playback state".into());
         }
         Ok(())
+    }
+}
+/// Successful OS publications only. The system advances a playing timeline;
+/// resending it is needed for controls, track changes or a material clock jump.
+#[derive(Default)]
+pub struct MediaPublication {
+    metadata: Option<Snapshot>,
+    playback: Option<(Snapshot, std::time::Instant)>,
+    volume: Option<f64>,
+}
+impl MediaPublication {
+    pub fn metadata_changed(&self, next: &Snapshot) -> bool {
+        self.metadata.as_ref().is_none_or(|previous| {
+            previous.has_station != next.has_station
+                || previous.track_id != next.track_id
+                || previous.station != next.station
+                || previous.title != next.title
+                || previous.artist != next.artist
+                || previous.album != next.album
+                || previous.duration != next.duration
+        })
+    }
+    pub fn metadata_sent(&mut self, snapshot: &Snapshot) {
+        self.metadata = Some(snapshot.clone());
+    }
+    pub fn playback_due(&self, next: &Snapshot, now: std::time::Instant) -> bool {
+        self.playback.as_ref().is_none_or(|(previous, sent_at)| {
+            if previous.has_station != next.has_station
+                || previous.playing != next.playing
+                || previous.track_id != next.track_id
+                || previous.station != next.station
+            {
+                return true;
+            }
+            if !next.has_station {
+                return false;
+            }
+            let expected = previous.seconds
+                + if previous.playing {
+                    now.saturating_duration_since(*sent_at).as_secs_f64()
+                } else {
+                    0.0
+                };
+            (next.seconds - expected).abs() > 2.0
+        })
+    }
+    pub fn playback_sent(&mut self, snapshot: &Snapshot, now: std::time::Instant) {
+        self.playback = Some((snapshot.clone(), now));
+    }
+    pub fn volume_changed(&self, next: &Snapshot) -> bool {
+        self.volume != Some(if next.muted { 0.0 } else { next.volume })
+    }
+    pub fn volume_sent(&mut self, snapshot: &Snapshot) {
+        self.volume = Some(if snapshot.muted { 0.0 } else { snapshot.volume });
     }
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -89,6 +152,85 @@ pub fn visible(position: Position, width: u32, height: u32, area: (i32, i32, u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_timeline_extrapolates_until_controls_tracks_or_clock_jumps_change_it() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let mut next = Snapshot {
+            has_station: true,
+            playing: true,
+            track_id: "a".into(),
+            seconds: 10.0,
+            duration: 100.0,
+            ..Default::default()
+        };
+        let mut state = MediaPublication::default();
+        assert!(state.metadata_changed(&next));
+        assert!(state.playback_due(&next, now));
+        state.metadata_sent(&next);
+        state.playback_sent(&next, now);
+        assert!(!state.metadata_changed(&next));
+        next.seconds = 70.0;
+        assert!(!state.playback_due(&next, now + Duration::from_secs(60)));
+        next.seconds = 73.0;
+        assert!(state.playback_due(&next, now + Duration::from_secs(60)));
+        next.seconds = 67.0;
+        assert!(state.playback_due(&next, now + Duration::from_secs(60)));
+        next.seconds = 70.0;
+        next.playing = false;
+        assert!(state.playback_due(&next, now + Duration::from_secs(60)));
+        state.playback_sent(&next, now + Duration::from_secs(60));
+        assert!(!state.playback_due(&next, now + Duration::from_secs(120)));
+        next.track_id = "b".into();
+        assert!(state.playback_due(&next, now + Duration::from_secs(120)));
+        assert!(state.metadata_changed(&next)); // Even identical displayed titles.
+        state.metadata_sent(&next);
+        next.duration += 1.0;
+        assert!(state.metadata_changed(&next));
+        next.has_station = false;
+        assert!(state.playback_due(&next, now + Duration::from_secs(120)));
+        state.playback_sent(&next, now);
+        assert!(!state.playback_due(&next, now + Duration::from_secs(120)));
+    }
+    #[test]
+    fn failed_media_updates_remain_due_and_volume_tracks_the_audible_level() {
+        let now = std::time::Instant::now();
+        let mut next = Snapshot {
+            volume: 0.8,
+            ..Default::default()
+        };
+        let mut state = MediaPublication::default();
+        for _ in 0..2 {
+            assert!(state.playback_due(&next, now));
+            assert!(state.metadata_changed(&next));
+            assert!(state.volume_changed(&next));
+        }
+        state.volume_sent(&next);
+        assert!(!state.volume_changed(&next));
+        next.muted = true;
+        assert!(state.volume_changed(&next));
+        state.volume_sent(&next);
+        next.volume = 0.4;
+        assert!(!state.volume_changed(&next));
+        next.muted = false;
+        assert!(state.volume_changed(&next));
+    }
+    #[test]
+    fn rejects_unbounded_and_non_hex_desktop_colors() {
+        let mut snapshot = Snapshot::default();
+        snapshot.accent = "#aBc123".into();
+        snapshot.banner_color = "#123456".into();
+        snapshot.validate().unwrap();
+        snapshot.accent = "x".repeat(16385);
+        assert!(snapshot.validate().unwrap_err().contains("too long"));
+        snapshot.accent = "#abcdef;display:none".into();
+        assert!(snapshot.validate().is_err());
+        snapshot.accent.clear();
+        snapshot.banner_color = "red".into();
+        assert!(snapshot.validate().is_err());
+        snapshot.banner_color.clear();
+        snapshot.validate().unwrap();
+    }
     #[test]
     fn rejects_invalid_desktop_messages() {
         assert!(serde_json::from_str::<Action>(r#"{"type":"erase"}"#).is_err());

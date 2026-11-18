@@ -13,6 +13,7 @@ pub(crate) struct Smoke {
     mini_done: AtomicBool,
     finished: AtomicBool,
     phases: Mutex<Vec<String>>,
+    close_fixture: Mutex<Option<Vec<u8>>>,
 }
 pub fn active() -> bool {
     std::env::var_os("RADIO_REPLAY_NATIVE_SMOKE_DIR").is_some()
@@ -30,7 +31,11 @@ fn write_result(app: &tauri::AppHandle, smoke: &Smoke, ok: bool, message: &str) 
         .map(|p| p.display().to_string());
     #[cfg(not(feature = "native-audio"))]
     let audio_library: Option<String> = None;
-    let value = serde_json::json!({"passed":ok,"audioBackend":backend,"audioLibrary":audio_library,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
+    #[cfg(feature = "native-audio")]
+    let null_output = radio_replay_audio::test_output_enabled();
+    #[cfg(not(feature = "native-audio"))]
+    let null_output = false;
+    let value = serde_json::json!({"passed":ok,"audioBackend":backend,"audioLibrary":audio_library,"nullOutputRequested":null_output,"message":message,"trayReady":tray,"nativeMediaReady":media,"miniCompleted":smoke.mini_done.load(Ordering::Relaxed),"phases":smoke.phases.lock().map(|p|p.clone()).unwrap_or_default()});
     let _ = std::fs::write(
         smoke.directory.join("report.json"),
         serde_json::to_vec_pretty(&value).unwrap(),
@@ -43,6 +48,11 @@ fn report(app: &tauri::AppHandle, ok: bool, message: &str) {
     };
     if smoke.finished.swap(true, Ordering::Relaxed) {
         return;
+    }
+    if let Ok(mut fixture) = smoke.close_fixture.lock() {
+        if let Some(bytes) = fixture.take() {
+            let _ = std::fs::write(smoke.directory.join("stations.json"), bytes);
+        }
     }
     write_result(app, &smoke, ok, message);
     app.state::<super::desktop::Desktop>().mark_quitting();
@@ -137,6 +147,7 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<Option<PathBuf>, Box<dyn std
         mini_done: AtomicBool::new(false),
         finished: AtomicBool::new(false),
         phases: Mutex::default(),
+        close_fixture: Mutex::default(),
     });
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -178,6 +189,26 @@ pub fn native_smoke_report(
         return Ok(window.label() == "main"
             && std::env::var_os("RADIO_REPLAY_NETWORK_SMOKE_URL").is_some());
     }
+    if phase == "publicationReset" && window.label() == "main" {
+        super::desktop::smoke_publications(&app, true);
+        return Ok(true);
+    }
+    let mut ok = ok;
+    let message = if phase.starts_with("publicationSample") && window.label() == "main" {
+        let counts = super::desktop::smoke_publications(&app, false);
+        ok &= counts["mediaFailures"].as_u64() == Some(0);
+        if matches!(
+            phase.as_str(),
+            "publicationSamplePauseControl" | "publicationSampleResumeControl"
+        ) {
+            ok &= counts["mediaUpdates"]
+                .as_u64()
+                .is_some_and(|count| count > 0);
+        }
+        format!("{message}: {}", counts)
+    } else {
+        message
+    };
     if phase == "prepareNetwork" && window.label() == "main" {
         let url = radio_replay_network::validate(
             &std::env::var("RADIO_REPLAY_NETWORK_SMOKE_URL")
@@ -211,12 +242,46 @@ pub fn native_smoke_report(
         report(&app, false, &message);
         return Ok(false);
     }
+    if phase == "runtimeMissing" && window.label() == "main" {
+        report(
+            &app,
+            std::env::var_os("RADIO_REPLAY_NATIVE_SMOKE_MISSING_RUNTIME").is_some(),
+            "Missing audio runtime startup handling verified",
+        );
+        return Ok(false);
+    }
+    if phase == "unreadableCloseFixture" && window.label() == "main" {
+        let path = smoke.directory.join("stations.json");
+        *smoke.close_fixture.lock().map_err(|e| e.to_string())? =
+            Some(std::fs::read(&path).map_err(|e| e.to_string())?);
+        std::fs::write(path, b"{broken close fixture").map_err(|e| e.to_string())?;
+    }
+    if phase == "restoreCloseFixture" && window.label() == "main" {
+        if let Some(bytes) = smoke
+            .close_fixture
+            .lock()
+            .map_err(|e| e.to_string())?
+            .take()
+        {
+            std::fs::write(smoke.directory.join("stations.json"), bytes)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     if phase == "closeToTray" && window.label() == "main" {
         window.close().map_err(|e| e.to_string())?;
     }
+    if phase == "changePreparedFixture" && window.label() == "main" {
+        std::fs::File::options()
+            .write(true)
+            .open(smoke.directory.join("fixture-0.wav"))
+            .and_then(|file| {
+                file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            })
+            .map_err(|e| e.to_string())?;
+    }
     if phase == "cacheReopen" && window.label() == "main" {
         let cache = app.state::<super::MetadataCache>();
-        *cache.0.lock().map_err(|e| e.to_string())? = radio_replay_core::metadata::Cache::open(
+        *radio_replay_core::metadata::lock(&cache.0) = radio_replay_core::metadata::Cache::open(
             &smoke.directory.join("metadata-cache.sqlite"),
         );
     }
@@ -227,6 +292,7 @@ pub fn native_smoke_report(
                 paths: vec![
                     smoke.directory.join("fixture-0.wav"),
                     smoke.directory.join("fixture-1.wav"),
+                    smoke.directory.join("missing-drop-only.wav"),
                 ],
                 position: tauri::PhysicalPosition::new(0.0, 0.0),
             }),

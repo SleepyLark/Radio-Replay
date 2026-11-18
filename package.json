@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "vite build",
+    "build:native": "vite build --mode native && node tests/frontend-build.cjs native",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "predesktop": "node scripts/setup-mpv.mjs --ensure",
     "desktop": "tauri dev",
@@ -14,8 +15,9 @@
     "test:core": "cargo test -p radio-replay-core",
     "test:playback": "node --experimental-strip-types --test tests/*.test.mjs",
     "start": "npm run desktop",
-    "test:ui": "npm run build && node tests/ui-browser.cjs",
+    "test:ui": "npm run build && node tests/frontend-build.cjs web && node tests/ui-browser.cjs",
     "test:audio": "node tests/audio-browser.cjs",
+    "test:native": "pwsh -NoProfile -File scripts/test-native.ps1 -Repeat -MissingRuntime",
     "check:version": "node scripts/version.mjs",
     "clean": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean-builds.ps1",
     "version:set": "node scripts/version.mjs --set",
