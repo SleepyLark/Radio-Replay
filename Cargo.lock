@@ -2750,7 +2750,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radio-replay-audio"
-version = "0.6.6"
+version = "0.8.0"
 dependencies = [
  "libloading 0.8.9",
  "radio-replay-network",
@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "radio-replay-core"
-version = "0.6.6"
+version = "0.8.0"
 dependencies = [
  "encoding_rs",
  "lofty",
@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "radio-replay-desktop"
-version = "0.6.6"
+version = "0.8.0"
 dependencies = [
  "radio-replay-audio",
  "radio-replay-core",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "radio-replay-network"
-version = "0.6.6"
+version = "0.8.0"
 dependencies = [
  "reqwest 0.12.28",
  "tokio",
